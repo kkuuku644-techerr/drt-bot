@@ -466,4 +466,9 @@ async def cb_do_exchange(callback: CallbackQuery):
         data["pigs"] -= 20
         data["coins"] += 50
         await callback.answer("✅ Успешно! Обменяно 20 свиней на 50 монеток.", show_alert=True)
-        await callback.message.edit_text(f"🔄 **Обмен свиней**\n\nТвои свиньи: {data['pigs']
+        await callback.message.edit_text(f"🔄 Обмен свиней\n\nТвои свиньи: {data['pigs']} 🐷\nТвои монетки: {data['coins']} 🪙", parse_mode="Markdown")
+    else:
+        await callback.answer("❌ У тебя меньше 20 свиней!", show_alert=True)
+
+if __name__ == "__main__":
+    asyncio.run(dp.start_polling(bot))
