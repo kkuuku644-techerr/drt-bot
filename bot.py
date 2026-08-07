@@ -1,252 +1,269 @@
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import random, json, os
+import random
+import sqlite3
+import telebot
+from telebot import types
 
-TOKEN = "8935480244:AAH3w6vUIkQTnKD93SCBL8QiwIDKF7NS4kq"
-VIP_PRICE = 30
-PASSPORT_CHAT_ID = -1004409308961
-DATA_FILE = "data.json"
+TOKEN = "8935480244:AAH3w6vUIkQTnKD9eSCBL8QiwIDKF7NS4kg"
+CHANNEL_ID = -1004404647295
 ADMIN_CHAT_ID = -1004410094117
-CHANNEL Iimport logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import random, json, os
 
-TOKEN = "ВАШ_ТОКЕН"
-VIP_PRICE = 100
-PASSPORT_CHAT_ID = -1001234567890
-DATA_FILE = "data.json"
-CHANNEL_ID = 1004404647295
+bot = telebot.TeleBot(TOKEN)
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {"users": {}, "vip": set()}
 
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+# ================= БАЗА ДАННЫХ =================
+def init_db():
+  conn = sqlite3.connect("bot.db")
+  cur = conn.cursor()
+  cur.execute(
+      """CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 1000, is_vip INTEGER DEFAULT 0)"""
+  )
+  conn.commit()
+  conn.close()
 
-data = load_data()
 
 def get_user(user_id):
-    uid = str(user_id)
-    if uid not in data["users"]:
-        data["users"][uid] = {"balance": 1000, "total_bet": 0}
-        save_data()
-    return data["users"][uid]
+  conn = sqlite3.connect("bot.db")
+  cur = conn.cursor()
+  cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+  user = cur.fetchone()
+  if not user:
+    cur.execute(
+        "INSERT INTO users (user_id, balance) VALUES (?, ?)", (user_id, 1000)
+    )
+    conn.commit()
+    user = (user_id, 1000, 0)
+  conn.close()
+  return user
 
-def is_vip(user_id):
-    return str(user_id) in data["vip"]
 
-def main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎰 Слот", callback_data="slot"), InlineKeyboardButton("🎲 Кости", callback_data="dice")],
-        [InlineKeyboardButton("🃏 Блэкджек", callback_data="blackjack"), InlineKeyboardButton("🏆 VIP", callback_data="vip")],
-        [InlineKeyboardButton("👤 Профиль", callback_data="profile")]
-    ])
+def update_balance(user_id, amount):
+  conn = sqlite3.connect("bot.db")
+  cur = conn.cursor()
+  cur.execute(
+      "UPDATE users SET balance = balance + ? WHERE user_id=?",
+      (amount, user_id),
+  )
+  conn.commit()
+  conn.close()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_user(update.effective_user.id)
-    await update.message.reply_text(f"Добро пожаловать!\nБаланс: {user['balance']}💰", reply_markup=main_menu())
 
-async def passport(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != PASSPORT_CHAT_ID or not context.args:
-        return
-    await update.message.reply_text(f"Паспорт выдан {context.args[0]}")
+# ================= ГЛАВНОЕ МЕНЮ =================
+@bot.message_handler(commands=["start"])
+def start(message):
+  get_user(message.from_user.id)
+  markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+  markup.add("💳 Баланс", "🎲 Кости")
+  markup.add("🎰 Слоты", "💣 Мины")
+  markup.add("⭐ Купить VIP за звезды", "📤 Предложить слив")
+  bot.send_message(
+      message.chat.id,
+      "🎰 <b>Главное меню:</b> Выбирай игру или действие ниже:",
+      parse_mode="HTML",
+      reply_markup=markup,
+  )
 
-async def slot_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    bet = 10
-    if user["balance"] < bet:
-        await update.callback_query.answer("Недостаточно!", show_alert=True)
-        return
-    user["balance"] -= bet
-    result = random.choices(["🍒","🍋","🔔","💎","7️⃣"], weights=[30,30,20,15,5])[0]
-    win = bet*3 if result=="💎" else bet*5 if result=="7️⃣" else bet*2 if result=="🔔" else 0
-    user["balance"] += win
-    save_data()
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"🎰 {result}\nСтавка: {bet}\nВыигрыш: {win}\nБаланс: {user['balance']}💰", reply_markup=main_menu())
 
-async def dice_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    bet = 10
-    if user["balance"] < bet:
-        await update.callback_query.answer("Недостаточно!", show_alert=True)
-        return
-    user["balance"] -= bet
-    p, b = random.randint(1,6), random.randint(1,6)
-    win = bet*2 if p>b else bet if p==b else 0
-    user["balance"] += win
-    save_data()
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"🎲 Вы: {p} | Бот: {b}\nСтавка: {bet}\nВыигрыш: {win}\nБаланс: {user['balance']}💰", reply_markup=main_menu())
+@bot.message_handler(func=lambda m: m.text == "💳 Баланс")
+def balance(message):
+  user = get_user(message.from_user.id)
+  vip = "👑 Да" if user[2] else "❌ Нет"
+  bot.send_message(
+      message.chat.id,
+      f"💳 <b>Твой профиль:</b>\n💰 Баланс: {user[1]} монет\n👑 VIP статус: {vip}",
+      parse_mode="HTML",
+  )
 
-async def blackjack_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    bet = 10
-    if user["balance"] < bet:
-        await update.callback_query.answer("Недостаточно!", show_alert=True)
-        return
-    user["balance"] -= bet
-    p, d = random.randint(12,21), random.randint(12,21)
-    win = bet*2 if p>d and p<=21 else bet if p==d else bet*3 if p==21 and d!=21 else 0
-    user["balance"] += win
-    save_data()
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"🃏 Вы: {p} | Дилер: {d}\nСтавка: {bet}\nВыигрыш: {win}\nБаланс: {user['balance']}💰", reply_markup=main_menu())
 
-async def vip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    if is_vip(user_id):
-        await update.callback_query.answer("Вы уже VIP!")
-        return
-    if user["balance"] < VIP_PRICE:
-        await update.callback_query.answer(f"Нужно {VIP_PRICE}💰", show_alert=True)
-        return
-    user["balance"] -= VIP_PRICE
-    data["vip"].add(str(user_id))
-    user["balance"] += 50
-    save_data()
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text("🏆 Вы стали VIP! +50 бонус", reply_markup=main_menu())
+# ================= ИГРЫ (РАБОТАЮТ ВЕЗДЕ) =================
+@bot.message_handler(func=lambda m: m.text == "🎲 Кости")
+def dice(message):
+  user_id = message.from_user.id
+  user = get_user(user_id)
+  bet = 50
+  if user[1] < bet:
+    bot.send_message(message.chat.id, "❌ Недостаточно монет!")
+    return
+  update_balance(user_id, -bet)
+  res = random.randint(1, 6)
+  if res >= 4:
+    win = bet * 2
+    update_balance(user_id, win)
+    bot.send_message(
+        message.chat.id, f"🎲 Выпало: {res}\n🎉 Ты выиграл +{win} монет!"
+    )
+  else:
+    bot.send_message(
+        message.chat.id, f"🎲 Выпало: {res}\n😢 Ты проиграл -{bet} монет"
+    )
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"👤 Профиль\nБаланс: {user['balance']}💰\nVIP: {'✅' if is_vip(user_id) else '❌'}\nСтавок: {user['total_bet']}", reply_markup=main_menu())
 
-def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("passport", passport))
-    for cb in ["slot","dice","blackjack","vip","profile"]:
-        app.add_handler(CallbackQueryHandler(globals()[f"{cb}_game" if cb in ["slot","dice","blackjack"] else f"{cb}_handler"], pattern=cb))
-    app.run_polling()
+@bot.message_handler(func=lambda m: m.text == "🎰 Слоты")
+def slots(message):
+  user_id = message.from_user.id
+  user = get_user(user_id)
+  bet = 100
+  if user[1] < bet:
+    bot.send_message(message.chat.id, "❌ Недостаточно монет!")
+    return
+  update_balance(user_id, -bet)
+  symbols = ["🍒", "🍋", "7️⃣"]
+  res = [random.choice(symbols) for _ in range(3)]
+  if res[0] == res[1] == res[2]:
+    win = bet * 5
+    update_balance(user_id, win)
+    text = f"🎰 {' '.join(res)}\n🎉 ДЖЕКПОТ! +{win} монет!"
+  elif res[0] == res[1] or res[1] == res[2]:
+    win = bet * 2
+    update_balance(user_id, win)
+    text = f"🎰 {' '.join(res)}\n🎉 Выигрыш! +{win} монет!"
+  else:
+    text = f"🎰 {' '.join(res)}\n😢 Проигрыш -{bet} монет"
+  bot.send_message(message.chat.id, text)
 
-if name == "main":
-    main(
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {"users": {}, "vip": set()}
+@bot.message_handler(func=lambda m: m.text == "💣 Мины")
+def mines(message):
+  user_id = message.from_user.id
+  user = get_user(user_id)
+  bet = 200
+  if user[1] < bet:
+    bot.send_message(message.chat.id, "❌ Недостаточно монет!")
+    return
+  update_balance(user_id, -bet)
+  markup = types.InlineKeyboardMarkup(row_width=3)
+  for i in range(1, 7):
+    markup.add(
+        types.InlineKeyboardButton(
+            f"Клетка {i}", callback_data=f"mine_{i}_{bet}"
+        )
+    )
+  bot.send_message(
+      message.chat.id,
+      f"💣 <b>Мины!</b> Ставка: {bet} монет. Выбери безопасную клетку:",
+      parse_mode="HTML",
+      reply_markup=markup,
+  )
 
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
 
-data = load_data()
+@bot.callback_query_handler(func=lambda call: call.data.startswith("mine_"))
+def mine_callback(call):
+  _, cell, bet = call.data.split("_")
+  bet = int(bet)
+  win = random.choice([True, False])
+  if win:
+    reward = bet * 2
+    update_balance(call.from_user.id, reward)
+    bot.edit_message_text(
+        f"💣 Клетка #{cell}\n🎉 Нашел алмаз! +{reward} монет!",
+        call.message.chat.id,
+        call.message.message_id,
+    )
+  else:
+    bot.edit_message_text(
+        f"💣 Клетка #{cell}\n💥 Бах! Ты подорвался на мине!",
+        call.message.chat.id,
+        call.message.message_id,
+    )
+  bot.answer_callback_query(call.id)
 
-def get_user(user_id):
-    uid = str(user_id)
-    if uid not in data["users"]:
-        data["users"][uid] = {"balance": 1000, "total_bet": 0}
-        save_data()
-    return data["users"][uid]
 
-def is_vip(user_id):
-    return str(user_id) in data["vip"]
+# ================= ПОКУПКА VIP ЗА ЗВЕЗДЫ =================
+@bot.message_handler(func=lambda m: m.text == "⭐ Купить VIP за звезды")
+def buy_vip_stars(message):
+  markup = types.InlineKeyboardMarkup()
+  markup.add(
+      types.InlineKeyboardButton(
+          "⭐ Оплатить 25 Telegram Stars", callback_data="pay_vip_stars"
+      )
+  )
+  bot.send_message(
+      message.chat.id,
+      "👑 <b>Покупка VIP-статуса</b>\nСтоимость: <b>25 ⭐</b>",
+      parse_mode="HTML",
+      reply_markup=markup,
+  )
 
-def main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎰 Слот", callback_data="slot"), InlineKeyboardButton("🎲 Кости", callback_data="dice")],
-        [InlineKeyboardButton("🃏 Блэкджек", callback_data="blackjack"), InlineKeyboardButton("🏆 VIP", callback_data="vip")],
-        [InlineKeyboardButton("👤 Профиль", callback_data="profile")]
-    ])
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_user(update.effective_user.id)
-    await update.message.reply_text(f"Добро пожаловать!\nБаланс: {user['balance']}💰", reply_markup=main_menu())
+@bot.callback_query_handler(func=lambda call: call.data == "pay_vip_stars")
+def process_star_payment(call):
+  prices = [types.LabeledPrice(label="VIP статус", amount=25)]
+  bot.send_invoice(
+      chat_id=call.message.chat.id,
+      title="👑 VIP Статус",
+      description="Премиум-статус",
+      invoice_payload="vip_stars",
+      provider_token="",
+      currency="XTR",
+      prices=prices,
+  )
+  bot.answer_callback_query(call.id)
 
-async def passport(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != PASSPORT_CHAT_ID or not context.args:
-        return
-    await update.message.reply_text(f"Паспорт выдан {context.args[0]}")
 
-async def slot_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    bet = 10
-    if user["balance"] < bet:
-        await update.callback_query.answer("Недостаточно!", show_alert=True)
-        return
-    user["balance"] -= bet
-    result = random.choices(["🍒","🍋","🔔","💎","7️⃣"], weights=[30,30,20,15,5])[0]
-    win = bet*3 if result=="💎" else bet*5 if result=="7️⃣" else bet*2 if result=="🔔" else 0
-    user["balance"] += win
-    save_data()
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"🎰 {result}\nСтавка: {bet}\nВыигрыш: {win}\nБаланс: {user['balance']}💰", reply_markup=main_menu())
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def checkout(pre_checkout_query):
+  bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
-async def dice_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    bet = 10
-    if user["balance"] < bet:
-        await update.callback_query.answer("Недостаточно!", show_alert=True)
-        return
-    user["balance"] -= bet
-    p, b = random.randint(1,6), random.randint(1,6)
-    win = bet*2 if p>b else bet if p==b else 0
-    user["balance"] += win
-    save_data()
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"🎲 Вы: {p} | Бот: {b}\nСтавка: {bet}\nВыигрыш: {win}\nБаланс: {user['balance']}💰", reply_markup=main_menu())
 
-async def blackjack_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    bet = 10
-    if user["balance"] < bet:
-        await update.callback_query.answer("Недостаточно!", show_alert=True)
-        return
-    user["balance"] -= bet
-    p, d = random.randint(12,21), random.randint(12,21)
-    win = bet*2 if p>d and p<=21 else bet if p==d else bet*3 if p==21 and d!=21 else 0
-    user["balance"] += win
-    save_data()
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"🃏 Вы: {p} | Дилер: {d}\nСтавка: {bet}\nВыигрыш: {win}\nБаланс: {user['balance']}💰", reply_markup=main_menu())
+@bot.message_handler(content_types=["successful_payment"])
+def got_payment(message):
+  conn = sqlite3.connect("bot.db")
+  cur = conn.cursor()
+  cur.execute(
+      "UPDATE users SET is_vip = 1 WHERE user_id=?", (message.from_user.id,)
+  )
+  conn.commit()
+  conn.close()
+  bot.send_message(
+      message.chat.id, "🎉 <b>Успешно! Тебе выдан VIP-статус!</b>", parse_mode="HTML"
+  )
 
-async def vip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    if is_vip(user_id):
-        await update.callback_query.answer("Вы уже VIP!")
-        return
-    if user["balance"] < VIP_PRICE:
-        await update.callback_query.answer(f"Нужно {VIP_PRICE}💰", show_alert=True)
-        return
-    user["balance"] -= VIP_PRICE
-    data["vip"].add(str(user_id))
-    user["balance"] += 50
-    save_data()
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text("🏆 Вы стали VIP! +50 бонус", reply_markup=main_menu())
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"👤 Профиль\nБаланс: {user['balance']}💰\nVIP: {'✅' if is_vip(user_id) else '❌'}\nСтавок: {user['total_bet']}", reply_markup=main_menu())
+# ================= СИСТЕМА СЛИВОВ =================
+@bot.message_handler(func=lambda m: m.text == "📤 Предложить слив")
+def propose_slip(message):
+  bot.send_message(
+      message.chat.id,
+      "📤 Отправь следующим сообщением контент для модерации.",
+  )
+  bot.register_next_step_handler(message, forward_to_admin)
 
-def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("passport", passport))
-    for cb in ["slot","dice","blackjack","vip","profile"]:
-        app.add_handler(CallbackQueryHandler(globals()[f"{cb}_game" if cb in ["slot","dice","blackjack"] else f"{cb}_handler"], pattern=cb))
-    app.run_polling()
+
+def forward_to_admin(message):
+  user_id = message.from_user.id
+  markup = types.InlineKeyboardMarkup()
+  markup.add(
+      types.InlineKeyboardButton(
+          "✅ Подтвердить и слить в канал", callback_data=f"publish_{user_id}"
+      )
+  )
+  sent = bot.forward_message(ADMIN_CHAT_ID, message.chat.id, message.message_id)
+  bot.send_message(
+      ADMIN_CHAT_ID,
+      f"📥 Предложка от <code>{user_id}</code>:",
+      parse_mode="HTML",
+      reply_markup=markup,
+      reply_to_message_id=sent.message_id,
+  )
+  bot.send_message(message.chat.id, "✅ Отправлено на проверку!")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("publish_"))
+def publish_slip(call):
+  try:
+    bot.copy_message(
+        CHANNEL_ID, call.message.chat.id, call.message.reply_to_message.message_id
+    )
+    bot.edit_message_text(
+        "✅ Опубликовано!", call.message.chat.id, call.message.message_id
+    )
+  except Exception as e:
+    bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+  bot.answer_callback_query(call.id)
+
 
 if __name__ == "__main__":
-    main()
+  init_db()
+  print("Бот запущен!")
+  bot.infinity_polling()
+
