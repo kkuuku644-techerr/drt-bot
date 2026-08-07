@@ -42,7 +42,6 @@ def get_user(user_id, username=''):
         cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
         user = cur.fetchone()
     else:
-        # Проверка истечения VIP (1 месяц = 30 дней = 2592000 секунд)
         if user[4] == 1 and user[5] > 0 and now > user[5]:
             cur.execute("UPDATE users SET is_vip = 0, vip_expire = 0 WHERE user_id=?", (user_id,))
             conn.commit()
@@ -78,7 +77,7 @@ def set_vip_status(user_id, days=30):
     conn.close()
 
 def get_main_keyboard():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add('🎰 Казино', '📋 Паспорт')
     markup.add('⭐ VIP за звезды', '📤 Слив')
     return markup
@@ -291,16 +290,16 @@ def forward_to_admin(message):
         return
 
     user_id = message.from_user.id
+    uname = f"@{message.from_user.username}" if message.from_user.username else "нет"
     markup = types.InlineKeyboardMarkup()
     markup.row(
-        types.InlineKeyboardButton("✅ Принять", callback_data=f"publish_{message.chat.id}_{message.message_id}_{user_id}"),
+        types.InlineKeyboardButton("✅ Принять", callback_data=f"publish_{user_id}"),
         types.InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{user_id}")
     )
 
     try:
-        # Используем отправку копии сообщения, чтобы избежать ошибок пересылки из защищенных чатов
-        bot.copy_message(ADMIN_CHAT_ID, message.chat.id, message.message_id, reply_markup=markup)
-        bot.send_message(ADMIN_CHAT_ID, f"📥 Предложка от <code>{user_id}</code>:", parse_mode='HTML')
+        bot.send_message(ADMIN_CHAT_ID, f"📥 Предложка от игрока ID: <code>{user_id}</code> ({uname}):", parse_mode='HTML')
+        bot.send_copy(ADMIN_CHAT_ID, message, reply_markup=markup)
         bot.send_message(message.chat.id, "✅ Отправлено на проверку администратору!", reply_markup=get_main_keyboard())
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка отправки: {e}", reply_markup=get_main_keyboard())
@@ -309,18 +308,17 @@ def forward_to_admin(message):
 def admin_slip_handler(call):
     data = call.data.split('_')
     action = data[0]
+    user_id = int(data[1])
 
     if action == 'publish':
-        chat_id, msg_id, user_id = int(data[1]), int(data[2]), int(data[3])
         try:
-            bot.copy_message(CHANNEL_ID, chat_id, msg_id)
+            bot.send_copy(CHANNEL_ID, call.message)
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
             bot.send_message(call.message.chat.id, "✅ Опубликовано в канал!")
             bot.send_message(user_id, "🎉 Твой слив был успешно принят и опубликован в канале!")
         except Exception as e:
             bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
     elif action == 'reject':
-        user_id = int(data[1])
         try:
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
             bot.send_message(call.message.chat.id, "❌ Предложка отклонена.")
@@ -385,7 +383,7 @@ def process_add_vip(message):
         set_vip_status(target_id, days=30)
         bot.send_message(message.chat.id, f"✅ VIP-статус на 30 дней успешно выдан игроку <code>{target_id}</code>!", parse_mode='HTML')
     except Exception as e:
-        bot.send_message(message.chat.id, f>f"❌ Ошибка: {e}")
+        bot.send_message(message.chat.id, f"❌ Ошибка: {e}")
 
 if __name__ == "__main__":
     init_db()
