@@ -1,1 +1,1 @@
-aiogram
+pyTelegramBotApi=4. 13.0
