@@ -1,18 +1,19 @@
+flyctl deploy --build-only --push -a drt-bot --image-label deployment-4f471422090fb9e547e4914990d3de47 --config fly.toml
 
-==> Проверка конфигурации приложения
+==> Verifying app config
 
-Проверка файла fly.toml
+Validating fly.toml
 
-✓ Конфигурация действительна
+✓ Configuration is valid
 
---> Проверена конфигурация приложения
+--> Verified app config
 
-==> Изображение здания
+==> Building image
 
-==> Изображение здания
+==> Building image
 
-Ошибка: не удалось загрузить образ или собрать проект из исходного кода: несанкционированный доступ (Идентификатор запроса: 01KZDJFNQ7R294TK4EM2QB4J13-iad) (Идентификатор трассировки: 32480afc08c767fcb676d03720b2bfae)
+Error: failed to fetch an image or build from source: unauthorized (Request ID: 01KZDJKEXY44G89GQXMY5GJVNS-iad) (Trace ID: 090346118de0e90376f6c747cfc334b1)
 
-Ошибка сборки Dockerfile
+Dockerfile failed to build error
 
-Неудачная попытка выполнить команду 'flyctl deploy --build-only --push -a drt-bot --image-label deployment-df7aaa9e1544efc1605f770c463f8eee --config fly.toml'
+unsuccessful command 'flyctl deploy --build-only --push -a drt-bot --image-label deployment-4f471422090fb9e547e4914990d3de47 --config fly.toml'
