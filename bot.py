@@ -519,4 +519,26 @@ def mines_game(message):
                     f"Выбери клетку (1-10):",
                     parse_mode='HTML', reply_markup=markup)
 
-@bot.callback_query_handler(func
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('mine_'))
+def mine_callback(call):
+    _, cell, bet, multiplier = call.data.split('_')
+    bet = int(bet)
+    multiplier = float(multiplier)
+    
+    win = random.random() < 0.3
+    
+    if win:
+        reward = int(bet * multiplier)
+        update_balance(call.from_user.id, reward)
+        bot.edit_message_text(f"💣 <b>Клетка #{cell}</b>\n━━━━━━━━━━━━━━━\n🎉 НАШЕЛ АЛМАЗ! +{reward} монет!",
+                            call.message.chat.id, call.message.message_id, parse_mode='HTML')
+    else:
+        bot.edit_message_text(f"💣 <b>Клетка #{cell}</b>\n━━━━━━━━━━━━━━━\n💥 БУХ! Ты подорвался на мине!",
+                            call.message.chat.id, call.message.message_id, parse_mode='HTML')
+    bot.answer_callback_query(call.id)
+
+if name == "main":
+    init_db()
+    print("Бот успешно запущен!")
+    bot.infinity_polling()
