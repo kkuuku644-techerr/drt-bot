@@ -131,23 +131,31 @@ def dice_game(message):
     else:
         bot.send_message(message.chat.id, f"🎲 Выпало: {res}\n😢 Проигрыш! -{bet} монет")
 
-@bot.message_handler(func=lambda m: m.text == '🎰 Слоты')
-def slots_game(message):
+@bot.message_handler(func=lambda m: m.text == '📋 Паспорт')
+def passport_menu(message):
     user_id = message.from_user.id
-    user = get_user(user_id)
-    bet = 100
-    if user[1] < bet:
-        bot.send_message(message.chat.id, "❌ Недостаточно монет!")
-        return
-    update_balance(user_id, -bet)
-    symbols = ['🍒', '🍋', '7️⃣', '💎']
-    res = [random.choice(symbols) for _ in range(3)]
-    if res[0] == res[1] == res[2]:
-        win = bet * 5
-        update_balance(user_id, win)
-        text = f"🎰 {' '.join(res)}\n🎉 ДЖЕКПОТ! +{win} монет!"
-    elif res[0] == res[1] or res[1] == res[2]:
-        win = bet * 2
+    passport = get_passport(user_id)
+    
+    if not passport:
+        passport = {'name': message.from_user.first_name, 'tags': ['drt']}
+        set_passport(user_id, passport)
+        
+    tags = passport.get('tags', [])
+    has_tag = any(t in tags for t in REQUIRED_TAGS)
+    status = "✅ Проверен" if has_tag else "❌ Нет приписки"
+    
+    text = f"""
+📋 <b>ЛИЧНЫЙ ПАСПОРТ ИГРОКА</b>
+━━━━━━━━━━━━━━━━━━━━━
+🆔 ID: <code>{user_id}</code>
+👤 Имя: <code>{passport.get('name')}</code>
+🏷️ Приписки: <code>{', '.join(tags)}</code>
+📌 Статус: <code>{status}</code>
+━━━━━━━━━━━━━━━━━━━━━
+"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🏷️ Добавить приписку", callback_data="add_tag_menu"))
+    bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
         update_balance(user_id, win)
         text = f"🎰 {' '.join(res)}\n🎉 Выигрыш! +{win} монет!"
     else:
