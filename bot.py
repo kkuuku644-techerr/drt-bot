@@ -1,10 +1,10 @@
+import json
 import random
 import sqlite3
-import json
 import telebot
 from telebot import types
 
-TOKEN = "8935480244:AAHeLi0e2Aqe2RA9m2oh8v9vGkHNwSsAPPI"
+TOKEN = "8935480244:AAH3w6vUIkQTnKD9eSCBL8QiwIDKF7NS4kg"
 CHANNEL_ID = -1004404647295
 ADMIN_CHAT_ID = -1004410094117
 ADMIN_IDS = [7959524856]
@@ -13,7 +13,6 @@ REQUIRED_TAGS = ['drt', 'd1rty', 'pig.zip']
 
 bot = telebot.TeleBot(TOKEN)
 
-# ================= БАЗА ДАННЫХ =================
 def init_db():
     conn = sqlite3.connect('bot.db')
     cur = conn.cursor()
@@ -67,7 +66,6 @@ def get_passport(user_id):
         return json.loads(user[4])
     return {}
 
-# ================= КЛАВИАТУРЫ =================
 def get_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
     markup.add('🎰 Казино', '💳 Баланс', '📋 Паспорт')
@@ -86,13 +84,10 @@ def get_shop_keyboard():
     markup.add('🔙 Назад')
     return markup
 
-# ================= ГЛАВНОЕ МЕНЮ И СТАРТ =================
 @bot.message_handler(commands=['start'])
 def start(message):
     get_user(message.from_user.id)
-    bot.send_message(message.chat.id, 
-                    "🎰 <b>Добро пожаловать в игровой мир!</b>\nИспользуй кнопки ниже:",
-                    parse_mode='HTML', reply_markup=get_main_keyboard())
+    bot.send_message(message.chat.id, "🎰 <b>Добро пожаловать в игровой мир!</b>\nИспользуй кнопки ниже:", parse_mode='HTML', reply_markup=get_main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == '🔙 Назад')
 def back_to_main(message):
@@ -102,14 +97,8 @@ def back_to_main(message):
 def balance_menu(message):
     user = get_user(message.from_user.id)
     vip = "👑 Да" if user[3] else "❌ Нет"
-    bot.send_message(message.chat.id, 
-                    f"💳 <b>Твой профиль:</b>\n"
-                    f"💰 Баланс: <code>{user[1]}</code> монет\n"
-                    f"🐷 Свиней: <code>{user[2]}</code>\n"
-                    f"👑 VIP статус: <code>{vip}</code>",
-                    parse_mode='HTML')
+    bot.send_message(message.chat.id, f"💳 <b>Твой профиль:</b>\n💰 Баланс: <code>{user[1]}</code> монет\n🐷 Свиней: <code>{user[2]}</code>\n👑 VIP статус: <code>{vip}</code>", parse_mode='HTML')
 
-# ================= КАЗИНО И ИГРЫ =================
 @bot.message_handler(func=lambda m: m.text == '🎰 Казино')
 def casino_menu(message):
     bot.send_message(message.chat.id, "🎰 <b>Раздел казино:</b> Выбирай игру:", parse_mode='HTML', reply_markup=get_casino_keyboard())
@@ -131,34 +120,29 @@ def dice_game(message):
     else:
         bot.send_message(message.chat.id, f"🎲 Выпало: {res}\n😢 Проигрыш! -{bet} монет")
 
-@bot.message_handler(func=lambda m: m.text == '📋 Паспорт')
-def passport_menu(message):
+@bot.message_handler(func=lambda m: m.text == '🎰 Слоты')
+def slots_game(message):
     user_id = message.from_user.id
-    passport = get_passport(user_id)
-    
-    if not passport:
-        passport = {'name': message.from_user.first_name, 'tags': ['drt']}
-        set_passport(user_id, passport)
-        
-    tags = passport.get('tags', [])
-    has_tag = any(t in tags for t in REQUIRED_TAGS)
-    status = "✅ Проверен" if has_tag else "❌ Нет приписки"
-    
-    text = f"""
-📋 <b>ЛИЧНЫЙ ПАСПОРТ ИГРОКА</b>
-━━━━━━━━━━━━━━━━━━━━━
-🆔 ID: <code>{user_id}</code>
-👤 Имя: <code>{passport.get('name')}</code>
-🏷️ Приписки: <code>{', '.join(tags)}</code>
-📌 Статус: <code>{status}</code>
-━━━━━━━━━━━━━━━━━━━━━
-"""
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🏷️ Добавить приписку", callback_data="add_tag_menu"))
-    bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
-        
+    user = get_user(user_id)
+    bet = 100
+    if user[1] < bet:
+        bot.send_message(message.chat.id, "❌ Недостаточно монет!")
+        return
+    update_balance(user_id, -bet)
+    symbols = ['🍒', '🍋', '7️⃣', '💎']
+    res = [random.choice(symbols) for _ in range(3)]
+    if res[0] == res[1] == res[2]:
+        win = bet * 5
+        update_balance(user_id, win)
+        text = f"🎰 {' '.join(res)}\n🎉 ДЖЕКПОТ! +{win} монет!"
+    elif res[0] == res[1] or res[1] == res[2]:
+        win = bet * 2
+        update_balance(user_id, win)
+        text = f"🎰 {' '.join(res)}\n🎉 Выигрыш! +{win} монет!"
+    else:
+        text = f"🎰 {' '.join(res)}\n😢 Проигрыш -{bet} монет"
+    bot.send_message(message.chat.id, text)
 
-# МИНЫ В ВИДЕ КВАДРАТА (СЕТКА 3х3)
 @bot.message_handler(func=lambda m: m.text == '💣 Мины')
 def mines_game(message):
     user_id = message.from_user.id
@@ -168,14 +152,10 @@ def mines_game(message):
         bot.send_message(message.chat.id, "❌ Недостаточно монет!")
         return
     update_balance(user_id, -bet)
-
     markup = types.InlineKeyboardMarkup(row_width=3)
     for i in range(1, 10):
         markup.add(types.InlineKeyboardButton(f"📦 Клетка {i}", callback_data=f"mine_{i}_{bet}"))
-
-    bot.send_message(message.chat.id, 
-                    f"💣 <b>Мины (Квадрат 3x3)</b>\nСтавка: {bet} монет.\nВыбери безопасную ячейку:",
-                    parse_mode='HTML', reply_markup=markup)
+    bot.send_message(message.chat.id, f"💣 <b>Мины (Квадрат 3x3)</b>\nСтавка: {bet} монет.\nВыбери безопасную ячейку:", parse_mode='HTML', reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mine_'))
 def mine_callback(call):
@@ -190,21 +170,16 @@ def mine_callback(call):
         bot.edit_message_text(f"💣 Клетка #{cell}\n💥 БУХ! Ты подорвался на мине!", call.message.chat.id, call.message.message_id)
     bot.answer_callback_query(call.id)
 
-# ================= ПОЛНОЦЕННЫЙ ПАСПОРТ =================
 @bot.message_handler(func=lambda m: m.text == '📋 Паспорт')
 def passport_menu(message):
     user_id = message.from_user.id
     passport = get_passport(user_id)
-
     if not passport:
-        # Автоматически создаем паспорт, если его не было
         passport = {'name': message.from_user.first_name, 'tags': ['drt']}
         set_passport(user_id, passport)
-
     tags = passport.get('tags', [])
     has_tag = any(t in tags for t in REQUIRED_TAGS)
-    status = "✅ Проверен" else "❌ Нет приписки"
-
+    status = "✅ Проверен" if has_tag else "❌ Нет приписки"
     text = f"""
 📋 <b>ЛИЧНЫЙ ПАСПОРТ ИГРОКА</b>
 ━━━━━━━━━━━━━━━━━━━━━
@@ -239,15 +214,10 @@ def apply_tag(call):
     bot.answer_callback_query(call.id, f"Успешно добавлена приписка: {tag}!", show_alert=True)
     bot.edit_message_text(f"✅ Приписка <b>{tag}</b> добавлена в твой паспорт!", call.message.chat.id, call.message.message_id, parse_mode='HTML')
 
-# ================= СВИНЬИ И МАГАЗИН =================
 @bot.message_handler(func=lambda m: m.text == '🐷 Свиньи')
 def pigs_shop(message):
     user = get_user(message.from_user.id)
-    bot.send_message(message.chat.id,
-                    f"🐷 <b>Ферма свиней</b>\n"
-                    f"У тебя свиней: <code>{user[2]}</code>\n"
-                    f"Баланс: <code>{user[1]}</code> монет\n",
-                    parse_mode='HTML', reply_markup=get_shop_keyboard())
+    bot.send_message(message.chat.id, f"🐷 <b>Ферма свиней</b>\nУ тебя свиней: <code>{user[2]}</code>\nБаланс: <code>{user[1]}</code> монет\n", parse_mode='HTML', reply_markup=get_shop_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == '🐷 Купить свинью (500💰)')
 def buy_pig(message):
@@ -269,7 +239,6 @@ def sell_pig(message):
     update_balance(message.from_user.id, 300)
     bot.send_message(message.chat.id, "💎 Ты продал свинью за 300 монет!")
 
-# ================= ПОКУПКА ВИП ЗА ЗВЕЗДЫ =================
 @bot.message_handler(func=lambda m: m.text == '⭐ Купить VIP за звезды')
 def buy_vip_stars(message):
     markup = types.InlineKeyboardMarkup()
@@ -303,7 +272,6 @@ def got_payment(message):
     conn.close()
     bot.send_message(message.chat.id, "🎉 <b>Оплата прошла успешно! Тебе выдан VIP-статус!</b>", parse_mode='HTML')
 
-# ================= СЛИВЫ =================
 @bot.message_handler(func=lambda m: m.text == '📤 Предложить слив')
 def propose_slip(message):
     bot.send_message(message.chat.id, "📤 Отправь следующим сообщением контент (текст, фото, видео) для модерации.")
@@ -326,7 +294,6 @@ def publish_slip(call):
         bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
     bot.answer_callback_query(call.id)
 
-# ================= АДМИН-ПАНЕЛЬ =================
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.from_user.id not in ADMIN_IDS:
