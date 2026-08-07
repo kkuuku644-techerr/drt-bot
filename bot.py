@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "8935480244:AAHeLi0e2Aqe2RA9m2oh8v9vGkHNwSsAPPI"
+TOKEN = "8935480344:AAH3w6vUIkQTnKD9eSCBL8QiwIDKF7NS4kg"
 CHANNEL_ID = -1004404647295
 ADMIN_CHAT_ID = -1004410094117
 ADMIN_IDS = [7959524856]
