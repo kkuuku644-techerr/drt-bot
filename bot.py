@@ -9,20 +9,17 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 # ================= НАСТРОЙКИ =================
-TOKEN = os.getenv("BOT_TOKEN", "8935480244:AAHeLi0e2Aqe2RA9m2oh8v9vGkHNwSsAPPI")
+TOKEN = "8935480244:AAHeLi0e2Aqe2RA9m2oh8v9vGkHNwSsAPPI"
 
-# Для частного канала используй числовой ID с минусом (например, -1004404647295)
-CHANNEL_ID = os.getenv("CHANNEL_ID", "-1004404647295")  
-
-# Укажи свой Telegram ID для доступа к админ-панели
-ADMIN_IDS = [int(os.getenv("ADMIN_ID", "7959524856"))]
+CHANNEL_ID = "-1004404647295"  
+ADMIN_CHAT_ID = -1004410094117
+ADMIN_IDS = [7959524856]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
-# ================= БАЗА ДАННЫХ И НАСТРОЙКИ =================
 users_db = {}
 bot_settings = {
     "welcome_text": "👋 Привет! Добро пожаловать в бота. Используй меню ниже для управления:"
@@ -39,7 +36,6 @@ def get_user(user_id: int):
         }
     return users_db[user_id]
 
-# ================= ПРОВЕРКА ПОДПИСКИ =================
 async def check_sub(user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
@@ -48,11 +44,8 @@ async def check_sub(user_id: int) -> bool:
         return True
     except Exception as e:
         print(f"Ошибка проверки подписки: {e}")
-        # Если бот не добавлен админом в частный канал, вернет True чтобы не ломать тест, 
-        # но для работы обязательно сделай бота админом канала!
         return True
 
-# ================= КНОПКИ =================
 def get_main_keyboard(is_admin: bool = False):
     keyboard = [
         [InlineKeyboardButton(text="🐷 Свиньи / Обмен", callback_data="swine_menu")],
@@ -64,7 +57,6 @@ def get_main_keyboard(is_admin: bool = False):
         keyboard.append([InlineKeyboardButton(text="👑 Админ-панель", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-# ================= СТАРТ =================
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     if not await check_sub(message.from_user.id):
@@ -78,7 +70,6 @@ async def cmd_start(message: Message):
         reply_markup=get_main_keyboard(is_admin)
     )
 
-# ================= КОМАНДА /б (БАЛАНС СВИНЕЙ И МОНЕТ) =================
 @router.message(Command("б"))
 async def cmd_balance(message: Message):
     if not await check_sub(message.from_user.id):
@@ -95,7 +86,6 @@ async def cmd_balance(message: Message):
         parse_mode="Markdown"
     )
 
-# ================= ПАСПОРТ (ЕСТЬ ВЕЗДЕ: И В ЛС, И В ГРУППЕ) =================
 @router.message(Command("profile"))
 @router.message(Command("pasport"))
 @router.message(Command("passport"))
@@ -137,7 +127,6 @@ async def cb_passport(callback: CallbackQuery):
     await callback.message.answer(text, parse_mode="Markdown")
     await callback.answer()
 
-# ================= КАЗИНО И ИГРЫ (ВЕЗДЕ В ЧАТАХ И ЛС) =================
 @router.message(Command("bet"))
 @router.message(Command("casino"))
 async def cmd_casino_menu(message: Message):
@@ -195,7 +184,6 @@ async def game_mines(message: Message):
         user["losses"] += 1
         await message.answer("💥 Ты подорвался на мине! -100 монет.")
 
-# ================= МЕХАНИКА СЛИВОВ (АНОНИМНО И БЕЗ ВОДЫ) =================
 class SlivState(StatesGroup):
     waiting_for_content = State()
 
@@ -215,16 +203,18 @@ async def process_sliv(message: Message, state: FSMContext):
         await message.answer("❌ Подпишись на канал!")
         return
 
+    # Пересылаем саму предложку СОВЕРШЕННО ЧИСТО (без каких-либо прицепленных кнопок на ней)
+    forwarded = await message.forward(chat_id=ADMIN_CHAT_ID)
+
+    # Кнопку подтверждения отправляем отдельным сообщением СНИЗУ
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подтвердить слив", callback_data=f"approve_{message.message_id}")]
+        [InlineKeyboardButton(text="✅ Подтвердить слив", callback_data=f"approve_{forwarded.message_id}")]
     ])
 
-    for admin_id in ADMIN_IDS:
-        try:
-            await message.forward(chat_id=admin_id)
-            await bot.send_message(admin_id, f"📥 Новая предложка от пользователя `{message.from_user.id}`:", reply_markup=admin_kb)
-        except Exception:
-            pass
+    try:
+        await bot.send_message(ADMIN_CHAT_ID, f"📥 Новая предложка от пользователя `{message.from_user.id}`:", reply_markup=admin_kb, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Ошибка отправки кнопки в админ-чат: {e}")
 
     await message.answer("👀 Твоя предложка отправлена на проверку модераторам.")
     await state.clear()
@@ -247,7 +237,6 @@ async def approve_sliv_handler(callback: CallbackQuery):
     except Exception as e:
         await callback.answer(f"❌ Ошибка публикации: {e}", show_alert=True)
 
-# ================= ОНЛАЙН АДМИН-ПАНЕЛЬ И ЗЕРКАЛА =================
 class AdminStates(StatesGroup):
     waiting_for_coins = State()
     waiting_for_vip = State()
@@ -336,7 +325,7 @@ async def adm_welcome_process(message: Message, state: FSMContext):
     await state.clear()
 
 @router.callback_query(F.data == "adm_mirror")
-async def adm_mirror_start(callback: CallbackQuery, state: FSMContext):
+async def adm_mirror_start(callback: CallbackQuery, state: FSNContext if 'FSNC' in globals() else FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         return
     await callback.message.answer("Введи `USER_ID` или юзернейм человека, которому даешь разрешение на создание зеркала:", parse_mode="Markdown")
@@ -351,7 +340,6 @@ async def adm_mirror_process(message: Message, state: FSMContext):
     await message.answer(f"✅ Разрешение на зеркало для `{target}` успешно выдано!", parse_mode="Markdown")
     await state.clear()
 
-# ================= МЕНЮ КНОПОК =================
 @router.callback_query(F.data == "swine_menu")
 async def cb_swine(callback: CallbackQuery):
     if not await check_sub(callback.from_user.id):
@@ -368,7 +356,6 @@ async def cb_casino(callback: CallbackQuery):
     await callback.message.answer("🎰 Меню казино. Доступные игры: /dice, /slots, /coin, /mines.")
     await callback.answer()
 
-# ================= ЗАПУСК =================
 async def main():
     print("Идеальный бот запущен!")
     await dp.start_polling(bot)
