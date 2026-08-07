@@ -538,7 +538,7 @@ def mine_callback(call):
                             call.message.chat.id, call.message.message_id, parse_mode='HTML')
     bot.answer_callback_query(call.id)
 
-if name == "main":
+if __name__ == "__main__":
     init_db()
     print("Бот успешно запущен!")
     bot.infinity_polling()
