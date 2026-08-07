@@ -18,6 +18,7 @@ def init_db():
     cur = conn.cursor()
     cur.execute('''CREATE TABLE IF NOT EXISTS users
                    (user_id INTEGER PRIMARY KEY,
+                    username TEXT DEFAULT '',
                     balance INTEGER DEFAULT 1000,
                     pigs INTEGER DEFAULT 5,
                     is_vip INTEGER DEFAULT 0,
@@ -25,17 +26,21 @@ def init_db():
     conn.commit()
     conn.close()
 
-def get_user(user_id):
+def get_user(user_id, username=''):
     conn = sqlite3.connect('bot.db')
     cur = conn.cursor()
     cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
     user = cur.fetchone()
     if not user:
-        cur.execute("INSERT INTO users (user_id, balance, pigs, passport) VALUES (?, ?, ?, ?)", 
-                   (user_id, 1000, 5, ''))
+        cur.execute("INSERT INTO users (user_id, username, balance, pigs, passport) VALUES (?, ?, ?, ?, ?)", 
+                   (user_id, username, 1000, 5, ''))
         conn.commit()
         cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
         user = cur.fetchone()
+    else:
+        if username and user[1] != username:
+            cur.execute("UPDATE users SET username=? WHERE user_id=?", (username, user_id))
+            conn.commit()
     conn.close()
     return user
 
@@ -53,23 +58,10 @@ def update_pigs(user_id, amount):
     conn.commit()
     conn.close()
 
-def set_passport(user_id, passport_data):
-    conn = sqlite3.connect('bot.db')
-    cur = conn.cursor()
-    cur.execute("UPDATE users SET passport = ? WHERE user_id=?", (json.dumps(passport_data), user_id))
-    conn.commit()
-    conn.close()
-
-def get_passport(user_id):
-    user = get_user(user_id)
-    if user[4]:
-        return json.loads(user[4])
-    return {}
-
 def get_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    markup.add('🎰 Казино', '💳 Баланс', '📋 Паспорт')
-    markup.add('🐷 Свиньи', '⭐ Купить VIP за звезды', '📤 Предложить слив')
+    markup.add('🎰 Казино', '💳 Профиль', '📋 Паспорт')
+    markup.add('🐷 Свиньи', '⭐ VIP за звезды', '📤 Слив')
     return markup
 
 def get_casino_keyboard():
@@ -78,37 +70,77 @@ def get_casino_keyboard():
     markup.add('💣 Мины', '🔙 Назад')
     return markup
 
-def get_shop_keyboard():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add('🐷 Купить свинью (500💰)', '💎 Продать свинью (300💰)')
-    markup.add('🔙 Назад')
-    return markup
-
 @bot.message_handler(commands=['start'])
 def start(message):
-    get_user(message.from_user.id)
-    bot.send_message(message.chat.id, "🎰 <b>Добро пожаловать в игровой мир!</b>\nИспользуй кнопки ниже:", parse_mode='HTML', reply_markup=get_main_keyboard())
+    get_user(message.from_user.id, message.from_user.username or '')
+    bot.send_message(message.chat.id, "🎰 <b>Главное меню:</b>", parse_mode='HTML', reply_markup=get_main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == '🔙 Назад')
 def back_to_main(message):
     bot.send_message(message.chat.id, "Главное меню:", reply_markup=get_main_keyboard())
 
-@bot.message_handler(func=lambda m: m.text == '💳 Баланс')
+@bot.message_handler(commands=['б'])
+@bot.message_handler(func=lambda m: m.text in ['💳 Баланс', '💳 Профиль'])
 def balance_menu(message):
-    user = get_user(message.from_user.id)
-    vip = "👑 Да" if user[3] else "❌ Нет"
-    bot.send_message(message.chat.id, f"💳 <b>Твой профиль:</b>\n💰 Баланс: <code>{user[1]}</code> монет\n🐷 Свиней: <code>{user[2]}</code>\n👑 VIP статус: <code>{vip}</code>", parse_mode='HTML')
+    target_user = message.from_user
+    if message.reply_to_message:
+        target_user = message.reply_to_message.from_user
+
+    user = get_user(target_user.id, target_user.username or '')
+    vip = "👑 Да" if user[4] else "❌ Нет"
+    uname = f"@{target_user.username}" if target_user.username else "Нет юзернейма"
+
+    text = (f"💳 <b>Профиль игрока:</b>\n"
+            f"👤 Имя: {target_user.first_name}\n"
+            f"🔗 Юзер: {uname}\n"
+            f"🆔 ID: <code>{target_user.id}</code>\n"
+            f"💰 Монеты: <code>{user[2]}</code>\n"
+            f"🐷 Свиньи: <code>{user[3]}</code>\n"
+            f"👑 VIP статус: {vip}")
+    bot.send_message(message.chat.id, text, parse_mode='HTML')
+
+@bot.message_handler(commands=['п'])
+def transfer_coins(message):
+    if not message.reply_to_message:
+        bot.send_message(message.chat.id, "❌ Ответь этой командой на сообщение игрока, которому хочешь перевести монеты! Пример: <code>/п 500</code>", parse_mode='HTML')
+        return
+
+    try:
+        args = message.text.split()
+        amount = int(args[1])
+    except (IndexError, ValueError):
+        bot.send_message(message.chat.id, "❌ Укажи сумму! Пример: <code>/п 500</code>", parse_mode='HTML')
+        return
+
+    sender_id = message.from_user.id
+    receiver_id = message.reply_to_message.from_user.id
+
+    if sender_id == receiver_id:
+        bot.send_message(message.chat.id, "❌ Нельзя переводить монеты самому себе!")
+        return
+
+    sender = get_user(sender_id, message.from_user.username or '')
+    if sender[2] < amount:
+        bot.send_message(message.chat.id, "❌ Недостаточно монет для перевода!")
+        return
+
+    get_user(receiver_id, message.reply_to_message.from_user.username or '')
+
+    update_balance(sender_id, -amount)
+    update_balance(receiver_id, amount)
+
+    bot.send_message(message.chat.id, f"✅ Успешно переведено <code>{amount}</code> монет игроку!", parse_mode='HTML')
 
 @bot.message_handler(func=lambda m: m.text == '🎰 Казино')
 def casino_menu(message):
-    bot.send_message(message.chat.id, "🎰 <b>Раздел казино:</b> Выбирай игру:", parse_mode='HTML', reply_markup=get_casino_keyboard())
+    bot.send_message(message.chat.id, "🎰 <b>Казино:</b> Выбирай игру:", parse_mode='HTML', reply_markup=get_casino_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == '🎲 Кости')
 def dice_game(message):
     user_id = message.from_user.id
-    user = get_user(user_id)
+    user = get_user(user_id, message.from_user.username or '')
     bet = 50
-    if user[1] < bet:
+    if user[2] < bet:
         bot.send_message(message.chat.id, "❌ Недостаточно монет!")
         return
     update_balance(user_id, -bet)
@@ -123,9 +155,9 @@ def dice_game(message):
 @bot.message_handler(func=lambda m: m.text == '🎰 Слоты')
 def slots_game(message):
     user_id = message.from_user.id
-    user = get_user(user_id)
+    user = get_user(user_id, message.from_user.username or '')
     bet = 100
-    if user[1] < bet:
+    if user[2] < bet:
         bot.send_message(message.chat.id, "❌ Недостаточно монет!")
         return
     update_balance(user_id, -bet)
@@ -146,16 +178,16 @@ def slots_game(message):
 @bot.message_handler(func=lambda m: m.text == '💣 Мины')
 def mines_game(message):
     user_id = message.from_user.id
-    user = get_user(user_id)
+    user = get_user(user_id, message.from_user.username or '')
     bet = 200
-    if user[1] < bet:
+    if user[2] < bet:
         bot.send_message(message.chat.id, "❌ Недостаточно монет!")
         return
     update_balance(user_id, -bet)
     markup = types.InlineKeyboardMarkup(row_width=3)
     for i in range(1, 10):
-        markup.add(types.InlineKeyboardButton(f"📦 Клетка {i}", callback_data=f"mine_{i}_{bet}"))
-    bot.send_message(message.chat.id, f"💣 <b>Мины (Квадрат 3x3)</b>\nСтавка: {bet} монет.\nВыбери безопасную ячейку:", parse_mode='HTML', reply_markup=markup)
+        markup.add(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"mine_{i}_{bet}"))
+    bot.send_message(message.chat.id, f"💣 <b>Мины (Квадрат 3x3)</b>\nСтавка: {bet} монет.", parse_mode='HTML', reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mine_'))
 def mine_callback(call):
@@ -167,79 +199,42 @@ def mine_callback(call):
         update_balance(call.from_user.id, reward)
         bot.edit_message_text(f"💣 Клетка #{cell}\n💎 АЛМАЗ! +{reward} монет!", call.message.chat.id, call.message.message_id)
     else:
-        bot.edit_message_text(f"💣 Клетка #{cell}\n💥 БУХ! Ты подорвался на мине!", call.message.chat.id, call.message.message_id)
+        bot.edit_message_text(f"💣 Клетка #{cell}\n💥 БУХ! Мина!", call.message.chat.id, call.message.message_id)
     bot.answer_callback_query(call.id)
 
 @bot.message_handler(func=lambda m: m.text == '📋 Паспорт')
 def passport_menu(message):
-    user_id = message.from_user.id
-    passport = get_passport(user_id)
-    if not passport:
-        passport = {'name': message.from_user.first_name, 'tags': ['drt']}
-        set_passport(user_id, passport)
-    tags = passport.get('tags', [])
-    has_tag = any(t in tags for t in REQUIRED_TAGS)
-    status = "✅ Проверен" if has_tag else "❌ Нет приписки"
-    text = f"""
-📋 <b>ЛИЧНЫЙ ПАСПОРТ ИГРОКА</b>
-━━━━━━━━━━━━━━━━━━━━━
-🆔 ID: <code>{user_id}</code>
-👤 Имя: <code>{passport.get('name')}</code>
-🏷️ Приписки: <code>{', '.join(tags)}</code>
-📌 Статус: <code>{status}</code>
-━━━━━━━━━━━━━━━━━━━━━
-"""
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🏷️ Добавить приписку", callback_data="add_tag_menu"))
-    bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
+    target_user = message.from_user
+    if message.reply_to_message:
+        target_user = message.reply_to_message.from_user
 
-@bot.callback_query_handler(func=lambda call: call.data == "add_tag_menu")
-def add_tag_prompt(call):
-    markup = types.InlineKeyboardMarkup()
-    for tag in REQUIRED_TAGS:
-        markup.add(types.InlineKeyboardButton(f"+ {tag}", callback_data=f"apply_tag_{tag}"))
-    bot.edit_message_text("Выбери приписку для добавления в паспорт:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-    bot.answer_callback_query(call.id)
+    user = get_user(target_user.id, target_user.username or '')
+    uname = f"@{target_user.username}" if target_user.username else "Нет юзернейма"
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('apply_tag_'))
-def apply_tag(call):
-    tag = call.data.split('_')[2]
-    user_id = call.from_user.id
-    passport = get_passport(user_id)
-    tags = passport.get('tags', [])
-    if tag not in tags:
-        tags.append(tag)
-        passport['tags'] = tags
-        set_passport(user_id, passport)
-    bot.answer_callback_query(call.id, f"Успешно добавлена приписка: {tag}!", show_alert=True)
-    bot.edit_message_text(f"✅ Приписка <b>{tag}</b> добавлена в твой паспорт!", call.message.chat.id, call.message.message_id, parse_mode='HTML')
+    bio = target_user.first_name.lower()
+    if target_user.username:
+        bio += " " + target_user.username.lower()
+
+    found_tags = [t for t in REQUIRED_TAGS if t in bio]
+    status = f"✅ Проверен ({', '.join(found_tags)})" if found_tags else "❌ Нет приписки"
+
+    text = (f"📋 <b>ПАСПОРТ ИГРОКА</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 Имя: {target_user.first_name}\n"
+            f"🔗 Юзер: {uname}\n"
+            f"🆔 ID: <code>{target_user.id}</code>\n"
+            f"💰 Монеты: <code>{user[2]}</code>\n"
+            f"🐷 Свиньи: <code>{user[3]}</code>\n"
+            f"📌 Статус: {status}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━")
+    bot.send_message(message.chat.id, text, parse_mode='HTML')
 
 @bot.message_handler(func=lambda m: m.text == '🐷 Свиньи')
-def pigs_shop(message):
-    user = get_user(message.from_user.id)
-    bot.send_message(message.chat.id, f"🐷 <b>Ферма свиней</b>\nУ тебя свиней: <code>{user[2]}</code>\nБаланс: <code>{user[1]}</code> монет\n", parse_mode='HTML', reply_markup=get_shop_keyboard())
+def pigs_info(message):
+    user = get_user(message.from_user.id, message.from_user.username or '')
+    bot.send_message(message.chat.id, f"🐷 У тебя на балансе: <b>{user[3]}</b> свиней.", parse_mode='HTML')
 
-@bot.message_handler(func=lambda m: m.text == '🐷 Купить свинью (500💰)')
-def buy_pig(message):
-    user = get_user(message.from_user.id)
-    if user[1] < 500:
-        bot.send_message(message.chat.id, "❌ Недостаточно монет для покупки свиньи!")
-        return
-    update_balance(message.from_user.id, -500)
-    update_pigs(message.from_user.id, 1)
-    bot.send_message(message.chat.id, "🐷 Ты успешно купил свинью!")
-
-@bot.message_handler(func=lambda m: m.text == '💎 Продать свинью (300💰)')
-def sell_pig(message):
-    user = get_user(message.from_user.id)
-    if user[2] < 1:
-        bot.send_message(message.chat.id, "❌ У тебя нет свиней для продажи!")
-        return
-    update_pigs(message.from_user.id, -1)
-    update_balance(message.from_user.id, 300)
-    bot.send_message(message.chat.id, "💎 Ты продал свинью за 300 монет!")
-
-@bot.message_handler(func=lambda m: m.text == '⭐ Купить VIP за звезды')
+@bot.message_handler(func=lambda m: m.text == '⭐ VIP за звезды')
 def buy_vip_stars(message):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("⭐ Оплатить 25 Telegram Stars", callback_data="pay_vip_stars"))
@@ -251,7 +246,7 @@ def process_star_payment(call):
     bot.send_invoice(
         chat_id=call.message.chat.id,
         title="👑 VIP Статус",
-        description="Премиум-статус в боте",
+        description="Премиум-статус",
         invoice_payload="vip_stars",
         provider_token="",
         currency="XTR",
@@ -270,28 +265,55 @@ def got_payment(message):
     cur.execute("UPDATE users SET is_vip = 1 WHERE user_id=?", (message.from_user.id,))
     conn.commit()
     conn.close()
-    bot.send_message(message.chat.id, "🎉 <b>Оплата прошла успешно! Тебе выдан VIP-статус!</b>", parse_mode='HTML')
+    bot.send_message(message.chat.id, "🎉 <b>Оплата прошла успешно! VIP выдан!</b>", parse_mode='HTML')
 
-@bot.message_handler(func=lambda m: m.text == '📤 Предложить слив')
+@bot.message_handler(func=lambda m: m.text in ['📤 Слив', '📤 Предложить слив'])
 def propose_slip(message):
-    bot.send_message(message.chat.id, "📤 Отправь следующим сообщением контент (текст, фото, видео) для модерации.")
-    bot.register_next_step_handler(message, forward_to_admin)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    markup.add('❌ Отмена')
+    msg = bot.send_message(message.chat.id, "📤 Отправь следующим сообщением контент для слива (текст, фото, видео):", reply_markup=markup)
+    bot.register_next_step_handler(msg, forward_to_admin)
 
 def forward_to_admin(message):
+    if message.text == '❌ Отмена':
+        bot.send_message(message.chat.id, "❌ Отменено.", reply_markup=get_main_keyboard())
+        return
+
     user_id = message.from_user.id
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("✅ Подтвердить и слить в канал", callback_data=f"publish_{user_id}"))
-    sent = bot.forward_message(ADMIN_CHAT_ID, message.chat.id, message.message_id)
-    bot.send_message(ADMIN_CHAT_ID, f"📥 Предложка от <code>{user_id}</code>:", parse_mode='HTML', reply_markup=markup, reply_to_message_id=sent.message_id)
-    bot.send_message(message.chat.id, "✅ Отправлено администратору на проверку!")
+    markup.row(
+        types.InlineKeyboardButton("✅ Принять", callback_data=f"publish_{message.chat.id}_{message.message_id}_{user_id}"),
+        types.InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{user_id}")
+    )
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('publish_'))
-def publish_slip(call):
     try:
-        bot.copy_message(CHANNEL_ID, call.message.chat.id, call.message.reply_to_message.message_id)
-        bot.edit_message_text("✅ Успешно опубликовано в канал!", call.message.chat.id, call.message.message_id)
+        sent = bot.forward_message(ADMIN_CHAT_ID, message.chat.id, message.message_id)
+        bot.send_message(ADMIN_CHAT_ID, f"📥 Предложка от <code>{user_id}</code>:", parse_mode='HTML', reply_markup=markup, reply_to_message_id=sent.message_id)
+        bot.send_message(message.chat.id, "✅ Отправлено на проверку администратору!", reply_markup=get_main_keyboard())
     except Exception as e:
-        bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+        bot.send_message(message.chat.id, f"❌ Ошибка отправки: {e}", reply_markup=get_main_keyboard())
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('publish_') or call.data.startswith('reject_'))
+def admin_slip_handler(call):
+    data = call.data.split('_')
+    action = data[0]
+
+    if action == 'publish':
+        chat_id, msg_id, user_id = int(data[1]), int(data[2]), int(data[3])
+        try:
+            bot.copy_message(CHANNEL_ID, chat_id, msg_id)
+            bot.edit_message_text("✅ Опубликовано в канал!", call.message.chat.id, call.message.message_id)
+            bot.send_message(user_id, "🎉 Твой слив был успешно принят и опубликован в канале!")
+        except Exception as e:
+            bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+    elif action == 'reject':
+        user_id = int(data[1])
+        try:
+            bot.edit_message_text("❌ Предложка отклонена.", call.message.chat.id, call.message.message_id)
+            bot.send_message(user_id, "❌ К сожалению, твой слив был отклонен администратором.")
+        except Exception as e:
+            bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
+
     bot.answer_callback_query(call.id)
 
 @bot.message_handler(commands=['admin'])
@@ -299,17 +321,17 @@ def admin_panel(message):
     if message.from_user.id not in ADMIN_IDS:
         return
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("➕ Накрутить монеты по ID", callback_data="adm_add_coins"))
-    markup.add(types.InlineKeyboardButton("🐷 Накрутить свиней по ID", callback_data="adm_add_pigs"))
-    bot.send_message(message.chat.id, "👑 <b>Панель администратора:</b>\nВыбери действие:", parse_mode='HTML', reply_markup=markup)
+    markup.add(types.InlineKeyboardButton("➕ Накрутить монеты", callback_data="adm_coins"))
+    markup.add(types.InlineKeyboardButton("🐷 Накрутить свиней", callback_data="adm_pigs"))
+    bot.send_message(message.chat.id, "👑 <b>Админ-панель:</b>", parse_mode='HTML', reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data in ["adm_add_coins", "adm_add_pigs"])
+@bot.callback_query_handler(func=lambda call: call.data in ["adm_coins", "adm_pigs"])
 def adm_action_step(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     action = call.data
-    msg = bot.send_message(call.message.chat.id, "✍️ Введи ID игрока и количество через пробел:\n<i>Пример:</i> <code>7959524856 10000</code>", parse_mode='HTML')
-    if action == "adm_add_coins":
+    msg = bot.send_message(call.message.chat.id, "✍️ Введи ID и количество через пробел:\n<code>ID сумма</code>", parse_mode='HTML')
+    if action == "adm_coins":
         bot.register_next_step_handler(msg, process_add_coins)
     else:
         bot.register_next_step_handler(msg, process_add_pigs)
@@ -321,7 +343,7 @@ def process_add_coins(message):
         args = message.text.split()
         target_id, amount = int(args[0]), int(args[1])
         update_balance(target_id, amount)
-        bot.send_message(message.chat.id, f"✅ Успешно начислено {amount} монет игроку <code>{target_id}</code>!", parse_mode='HTML')
+        bot.send_message(message.chat.id, f"✅ Начислено {amount} монет игроку <code>{target_id}</code>!", parse_mode='HTML')
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка: {e}")
 
@@ -331,12 +353,12 @@ def process_add_pigs(message):
         args = message.text.split()
         target_id, amount = int(args[0]), int(args[1])
         update_pigs(target_id, amount)
-        bot.send_message(message.chat.id, f"✅ Успешно добавлено {amount} свиней игроку <code>{target_id}</code>!", parse_mode='HTML')
+        bot.send_message(message.chat.id, f"✅ Добавлено {amount} свиней игроку <code>{target_id}</code>!", parse_mode='HTML')
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка: {e}")
 
 if __name__ == "__main__":
     init_db()
-    print("Бот полностью запущен и готов к работе!")
+    print("Бот запущен со всеми исправлениями!")
     bot.infinity_polling()
 
