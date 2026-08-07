@@ -156,11 +156,7 @@ def passport_menu(message):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🏷️ Добавить приписку", callback_data="add_tag_menu"))
     bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
-        update_balance(user_id, win)
-        text = f"🎰 {' '.join(res)}\n🎉 Выигрыш! +{win} монет!"
-    else:
-        text = f"🎰 {' '.join(res)}\n😢 Проигрыш! -{bet} монет"
-    bot.send_message(message.chat.id, text)
+        
 
 # МИНЫ В ВИДЕ КВАДРАТА (СЕТКА 3х3)
 @bot.message_handler(func=lambda m: m.text == '💣 Мины')
