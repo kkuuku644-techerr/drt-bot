@@ -248,5 +248,5 @@ def main():
         app.add_handler(CallbackQueryHandler(globals()[f"{cb}_game" if cb in ["slot","dice","blackjack"] else f"{cb}_handler"], pattern=cb))
     app.run_polling()
 
-if name == "main":
+if __name__ == "__main__":
     main()
