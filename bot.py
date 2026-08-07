@@ -1,365 +1,522 @@
-import os
+import telebot
+from telebot import types
 import random
-import asyncio
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
+import sqlite3
+import time
+import json
+from datetime import datetime, timedelta
 
 # ================= НАСТРОЙКИ =================
 TOKEN = "8935480244:AAHeLi0e2Aqe2RA9m2oh8v9vGkHNwSsAPPI"
-
-CHANNEL_ID = "-1004404647295"  
+CHANNEL_ID = -1004404647295
 ADMIN_CHAT_ID = -1004410094117
 ADMIN_IDS = [7959524856]
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-router = Router()
-dp.include_router(router)
+START_BALANCE = 1000
+START_PIGS = 5
+VIP_MULTIPLIER = 2.5
+NORMAL_MULTIPLIER = 2.0
 
-users_db = {}
-bot_settings = {
-    "welcome_text": "👋 Привет! Добро пожаловать в бота. Используй меню ниже для управления:"
+# Приписки для паспорта
+REQUIRED_TAGS = ['drt', 'd1rty', 'pig.zip']
+
+# Цены за звезды
+STAR_PRICES = {
+    5: 1000,
+    45: 10000,
+    65: 15000,
+    100: 20000
 }
 
-def get_user(user_id: int):
-    if user_id not in users_db:
-        users_db[user_id] = {
-            "coins": 1000,
-            "swine": 5,
-            "vip": False,
-            "wins": 0,
-            "losses": 0
-        }
-    return users_db[user_id]
+VIP_STARS_PRICE = 25
 
-async def check_sub(user_id: int) -> bool:
+bot = telebot.TeleBot(TOKEN)
+
+# ================= БАЗА ДАННЫХ =================
+def init_db():
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute('''CREATE TABLE IF NOT EXISTS users
+                   (user_id INTEGER PRIMARY KEY,
+                    balance INTEGER DEFAULT 1000,
+                    pigs INTEGER DEFAULT 5,
+                    is_vip INTEGER DEFAULT 0,
+                    vip_until INTEGER DEFAULT 0,
+                    total_earned INTEGER DEFAULT 0,
+                    total_spent INTEGER DEFAULT 0,
+                    passport TEXT DEFAULT '')''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS settings
+                   (key TEXT PRIMARY KEY,
+                    value TEXT)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS mirrors
+                   (user_id INTEGER PRIMARY KEY)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS pending_slips
+                   (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    content TEXT,
+                    timestamp INTEGER)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS star_purchases
+                   (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    stars INTEGER,
+                    coins INTEGER,
+                    timestamp INTEGER)''')
+    conn.commit()
+    conn.close()
+
+def get_user(user_id):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    user = cur.fetchone()
+    if not user:
+        cur.execute("INSERT INTO users (user_id, balance, pigs, passport) VALUES (?, ?, ?, ?)", 
+                   (user_id, START_BALANCE, START_PIGS, ''))
+        conn.commit()
+        cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+        user = cur.fetchone()
+    conn.close()
+    return user
+
+def update_balance(user_id, amount):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
+    if amount > 0:
+        cur.execute("UPDATE users SET total_earned = total_earned + ? WHERE user_id=?", (amount, user_id))
+    else:
+        cur.execute("UPDATE users SET total_spent = total_spent + ? WHERE user_id=?", (abs(amount), user_id))
+    conn.commit()
+    conn.close()
+
+def update_pigs(user_id, amount):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET pigs = pigs + ? WHERE user_id=?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+def set_vip(user_id, status, days=30):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    if status:
+        vip_until = int((datetime.now() + timedelta(days=days)).timestamp())
+        cur.execute("UPDATE users SET is_vip = 1, vip_until = ? WHERE user_id=?", (vip_until, user_id))
+    else:
+        cur.execute("UPDATE users SET is_vip = 0, vip_until = 0 WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def check_vip(user_id):
+    user = get_user(user_id)
+    if user[3] and user[4] > int(time.time()):
+        return True
+    elif user[3]:
+        set_vip(user_id, 0)
+        return False
+    return False
+
+def set_passport(user_id, passport_data):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET passport = ? WHERE user_id=?", (json.dumps(passport_data), user_id))
+    conn.commit()
+    conn.close()
+
+def get_passport(user_id):
+    user = get_user(user_id)
+    if user[6]:
+        return json.loads(user[6])
+    return {}
+
+def get_setting(key):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+    val = cur.fetchone()
+    conn.close()
+    return val[0] if val else None
+
+def set_setting(key, value):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
+
+def add_mirror(user_id):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO mirrors (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+
+def is_mirror(user_id):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM mirrors WHERE user_id=?", (user_id,))
+    val = cur.fetchone()
+    conn.close()
+    return val is not None
+
+def add_pending_slip(user_id, content):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("INSERT INTO pending_slips (user_id, content, timestamp) VALUES (?, ?, ?)", 
+               (user_id, content, int(time.time())))
+    slip_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return slip_id
+
+def get_pending_slip(slip_id):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM pending_slips WHERE id=?", (slip_id,))
+    slip = cur.fetchone()
+    conn.close()
+    return slip
+
+def delete_pending_slip(slip_id):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("DELETE FROM pending_slips WHERE id=?", (slip_id,))
+    conn.commit()
+    conn.close()
+
+def log_star_purchase(user_id, stars, coins):
+    conn = sqlite3.connect('casino_bot.db')
+    cur = conn.cursor()
+    cur.execute("INSERT INTO star_purchases (user_id, stars, coins, timestamp) VALUES (?, ?, ?, ?)",
+               (user_id, stars, coins, int(time.time())))
+    conn.commit()
+    conn.close()
+
+# ================= КЛАВИАТУРА МЕНЮ =================
+def get_main_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(row_width=3, resize_keyboard=True)
+    btn1 = types.KeyboardButton('🎰 Казино')
+    btn2 = types.KeyboardButton('💳 Баланс')
+    btn3 = types.KeyboardButton('📋 Паспорт')
+    btn4 = types.KeyboardButton('🐷 Свиньи')
+    btn5 = types.KeyboardButton('⭐ Магазин')
+    btn6 = types.KeyboardButton('📤 Слив')
+    keyboard.add(btn1, btn2, btn3)
+    keyboard.add(btn4, btn5, btn6)
+    return keyboard
+
+def get_casino_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    btn1 = types.KeyboardButton('🎲 Кости')
+    btn2 = types.KeyboardButton('🎰 Слоты')
+    btn3 = types.KeyboardButton('🪙 Орел/Решка')
+    btn4 = types.KeyboardButton('💣 Мины')
+    btn5 = types.KeyboardButton('🔙 Назад')
+    keyboard.add(btn1, btn2)
+    keyboard.add(btn3, btn4)
+    keyboard.add(btn5)
+    return keyboard
+
+def get_shop_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    btn1 = types.KeyboardButton('🐷 Купить свинью')
+    btn2 = types.KeyboardButton('💎 Продать свинью')
+    btn3 = types.KeyboardButton('👑 Купить VIP')
+    btn4 = types.KeyboardButton('⭐ Купить за звезды')
+    btn5 = types.KeyboardButton('🔙 Назад')
+    keyboard.add(btn1, btn2)
+    keyboard.add(btn3, btn4)
+    keyboard.add(btn5)
+    return keyboard
+
+def get_star_shop_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    btn1 = types.KeyboardButton('⭐ 5⭐ = 1000💰')
+    btn2 = types.KeyboardButton('⭐ 45⭐ = 10000💰')
+    btn3 = types.KeyboardButton('⭐ 65⭐ = 15000💰')
+    btn4 = types.KeyboardButton('⭐ 100⭐ = 20000💰')
+    btn5 = types.KeyboardButton('👑 VIP (25⭐/мес)')
+    btn6 = types.KeyboardButton('🔙 Назад')
+    keyboard.add(btn1, btn2)
+    keyboard.add(btn3, btn4)
+    keyboard.add(btn5)
+    keyboard.add(btn6)
+    return keyboard
+
+# ================= ПРОВЕРКА ПОДПИСКИ =================
+def check_subscription(user_id):
     try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-        if member.status in ["left", "kicked"]:
-            return False
-        return True
-    except Exception as e:
-        print(f"Ошибка проверки подписки: {e}")
-        return True
+        member = bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ['member', 'administrator', 'creator']
+    except:
+        return False
 
-def get_main_keyboard(is_admin: bool = False):
-    keyboard = [
-        [InlineKeyboardButton(text="🐷 Свиньи / Обмен", callback_data="swine_menu")],
-        [InlineKeyboardButton(text="🎰 Казино", callback_data="casino_menu")],
-        [InlineKeyboardButton(text="🪪 Паспорт", callback_data="profile_btn")],
-        [InlineKeyboardButton(text="📤 Предложить слив", callback_data="suggest_sliv")]
-    ]
-    if is_admin:
-        keyboard.append([InlineKeyboardButton(text="👑 Админ-панель", callback_data="admin_panel")])
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+def subscription_required(func):
+    def wrapper(message, *args, **kwargs):
+        user_id = message.from_user.id
+        if not check_subscription(user_id):
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("📢 Подписаться на канал", url=f"https://t.me/{(bot.get_chat(CHANNEL_ID).invite_link or '').split('/')[-1]}"))
+            markup.add(types.InlineKeyboardButton("✅ Проверить подписку", callback_data="check_sub"))
+            bot.send_message(message.chat.id, 
+                           "❌ Для использования бота необходимо подписаться на наш канал!",
+                           reply_markup=markup)
+            return
+        return func(message, *args, **kwargs)
+    return wrapper
 
-@router.message(Command("start"))
-async def cmd_start(message: Message):
-    if not await check_sub(message.from_user.id):
-        await message.answer(f"❌ Чтобы пользоваться ботом, подпишись на наш канал!\nПосле подписки отправь /start снова.")
-        return
+@bot.callback_query_handler(func=lambda call: call.data == "check_sub")
+def check_sub_callback(call):
+    if check_subscription(call.from_user.id):
+        bot.edit_message_text("✅ Подписка подтверждена! Теперь вы можете использовать бота.",
+                            call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id)
+        # Показываем главное меню после подписки
+        show_main_menu(call.message.chat.id, call.from_user.id)
+    else:
+        bot.answer_callback_query(call.id, "❌ Вы все еще не подписаны!", show_alert=True)
 
-    get_user(message.from_user.id)
-    is_admin = message.from_user.id in ADMIN_IDS
-    await message.answer(
-        bot_settings["welcome_text"],
-        reply_markup=get_main_keyboard(is_admin)
-    )
+# ================= ГЛАВНОЕ МЕНЮ =================
+def show_main_menu(chat_id, user_id):
+    user = get_user(user_id)
+    vip_status = "👑 VIP" if check_vip(user_id) else "💎 Обычный"
 
-@router.message(Command("б"))
-async def cmd_balance(message: Message):
-    if not await check_sub(message.from_user.id):
-        await message.answer("❌ Подпишись на канал, чтобы использовать эту команду!")
-        return
+    welcome_text = f"""
+🎰 <b>ДОБРО ПОЖАЛОВАТЬ В КАЗИНО!</b>
+━━━━━━━━━━━━━━━━━━━━━
+👤 <b>Профиль:</b>
+💰 Баланс: <code>{user[1]}</code> монет
+🐷 Свиней: <code>{user[2]}</code>
+👑 Статус: <code>{vip_status}</code>
+━━━━━━━━━━━━━━━━━━━━━
+📌 <i>Используй кнопки ниже для навигации</i>
+"""
+    bot.send_message(chat_id, welcome_text, parse_mode='HTML', reply_markup=get_main_keyboard())
 
+# ================= ОБРАБОТЧИКИ КНОПОК =================
+@bot.message_handler(func=lambda message: message.text == '🔙 Назад')
+def back_to_main(message):
+    show_main_menu(message.chat.id, message.from_user.id)
+
+@bot.message_handler(func=lambda message: message.text == '🎰 Казино')
+@subscription_required
+def casino_menu(message):
+    bot.send_message(message.chat.id, 
+                    "🎰 <b>ВЫБЕРИ ИГРУ</b>\n━━━━━━━━━━━━━━━\n"
+                    "🎲 Кости - угадай число\n"
+                    "🎰 Слоты - крути барабаны\n"
+                    "🪙 Орел/Решка - 50/50\n"
+                    "💣 Мины - найди алмаз",
+                    parse_mode='HTML', reply_markup=get_casino_keyboard())
+
+@bot.message_handler(func=lambda message: message.text == '💳 Баланс')
+@subscription_required
+def show_balance(message):
     user = get_user(message.from_user.id)
-    vip_text = "👑 VIP Активен (х2 к выигрышам)" if user['vip'] else "Обычный"
-    await message.answer(
-        f"📊 **Твой баланс:**\n\n"
-        f"🐷 Свиньи: `{user['swine']}`\n"
-        f"🪙 Монеты: `{user['coins']}`\n"
-        f"⚡ Статус: {vip_text}",
-        parse_mode="Markdown"
-    )
+    vip_status = "👑 VIP" if check_vip(message.from_user.id) else "💎 Обычный"
+    bot.send_message(message.chat.id, 
+                    f"💳 <b>ТВОЙ БАЛАНС</b>\n━━━━━━━━━━━━━━━\n"
+                    f"💰 Монет: <code>{user[1]}</code>\n"
+                    f"🐷 Свиней: <code>{user[2]}</code>\n"
+                    f"👑 Статус: <code>{vip_status}</code>",
+                    parse_mode='HTML', reply_markup=get_main_keyboard())
 
-@router.message(Command("profile"))
-@router.message(Command("pasport"))
-@router.message(Command("passport"))
-async def cmd_passport(message: Message):
-    if not await check_sub(message.from_user.id):
-        await message.answer("❌ Подпишись на канал для просмотра паспорта!")
+@bot.message_handler(func=lambda message: message.text == '📋 Паспорт')
+@subscription_required
+def show_passport(message):
+    user_id = message.from_user.id
+    passport = get_passport(user_id)
+
+    if not passport:
+        bot.send_message(message.chat.id, 
+                        "📋 <b>У ТЕБЯ НЕТ ПАСПОРТА</b>\n━━━━━━━━━━━━━━━\n"
+                        "Создай паспорт чтобы играть!\n"
+                        "Напиши /passport чтобы создать",
+                        parse_mode='HTML', reply_markup=get_main_keyboard())
         return
 
+    tags = passport.get('tags', [])
+    has_tag = any(tag in tags for tag in REQUIRED_TAGS)
+    status_text = "✅ Есть" if has_tag else "❌ Нет"
+    vip_status = "👑 VIP" if check_vip(user_id) else "💎 Обычный"
+
+    passport_text = f"""
+📋 <b>ТВОЙ ПАСПОРТ</b>
+━━━━━━━━━━━━━━━
+🆔 ID: <code>{user_id}</code>
+👤 Имя: <code>{passport.get('name', 'Не указано')}</code>
+🏷️ Приписки: <code>{', '.join(tags) if tags else 'Нет'}</code>
+📌 Статус: <code>{status_text}</code>
+💎 Уровень: <code>{vip_status}</code>
+━━━━━━━━━━━━━━━
+"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔄 Обновить паспорт", callback_data="update_passport"))
+    markup.add(types.InlineKeyboardButton("🏷️ Добавить приписку", callback_data="add_tag"))
+
+    bot.send_message(message.chat.id, passport_text, parse_mode='HTML', 
+                    reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text == '🐷 Свиньи')
+@subscription_required
+def pigs_menu(message):
     user = get_user(message.from_user.id)
-    vip_text = "👑 VIP" if user['vip'] else "Обычный"
-    text = (
-        f"🪪 **Паспорт гражданина**\n\n"
-        f"👤 Имя: {message.from_user.full_name}\n"
-        f"🆔 ID: `{message.from_user.id}`\n"
-        f"🪙 Монеты: `{user['coins']}`\n"
-        f"🐷 Свиньи: `{user['swine']}`\n"
-        f"🏆 Побед / Поражений: {user['wins']} / {user['losses']}\n"
-        f"⚡ Привилегия: {vip_text}"
-    )
-    await message.answer(text, parse_mode="Markdown")
+    bot.send_message(message.chat.id, 
+                    f"🐷 <b>УПРАВЛЕНИЕ СВИНЬЯМИ</b>\n━━━━━━━━━━━━━━━\n"
+                    f"🐷 Свиней: <code>{user[2]}</code>\n"
+                    f"💰 Баланс: <code>{user[1]}</code>\n━━━━━━━━━━━━━━━\n"
+                    "💰 Купить: 500 монет\n"
+                    "💎 Продать: 300 монет",
+                    parse_mode='HTML', reply_markup=get_shop_keyboard())
 
-@router.callback_query(F.data == "profile_btn")
-async def cb_passport(callback: CallbackQuery):
-    if not await check_sub(callback.from_user.id):
-        await callback.answer("❌ Сначала подпишись на канал!", show_alert=True)
-        return
-
-    user = get_user(callback.from_user.id)
-    vip_text = "👑 VIP" if user['vip'] else "Обычный"
-    text = (
-        f"🪪 **Паспорт гражданина**\n\n"
-        f"👤 Имя: {callback.from_user.full_name}\n"
-        f"🆔 ID: `{callback.from_user.id}`\n"
-        f"🪙 Монеты: `{user['coins']}`\n"
-        f"🐷 Свиньи: `{user['swine']}`\n"
-        f"🏆 Побед / Поражений: {user['wins']} / {user['losses']}\n"
-        f"⚡ Привилегия: {vip_text}"
-    )
-    await callback.message.answer(text, parse_mode="Markdown")
-    await callback.answer()
-
-@router.message(Command("bet"))
-@router.message(Command("casino"))
-async def cmd_casino_menu(message: Message):
-    if not await check_sub(message.from_user.id):
-        await message.answer("❌ Подпишись на канал для игры в казино!")
-        return
-
-    await message.answer(
-        "🎰 **Казино и режимы игр**\n\n"
-        "Играй прямо в чате или группе:\n"
-        "• /dice — Бросить кубик\n"
-        "• /slots — Крутить слоты\n"
-        "• /coin — Орёл и решка\n"
-        "• /mines — Сыграть в мины (ставка 100 монет)"
-    )
-
-@router.message(Command("dice"))
-async def game_dice(message: Message):
-    if not await check_sub(message.from_user.id):
-        return
-    await message.answer_dice(emoji="🎲")
-
-@router.message(Command("slots"))
-async def game_slots(message: Message):
-    if not await check_sub(message.from_user.id):
-        return
-    await message.answer_dice(emoji="🎰")
-
-@router.message(Command("coin"))
-async def game_coin(message: Message):
-    if not await check_sub(message.from_user.id):
-        return
-    outcome = random.choice(["🪙 Выпал ОРЁЛ!", "🪙 Выпала РЕШКА!"])
-    await message.answer(outcome)
-
-@router.message(Command("mines"))
-async def game_mines(message: Message):
-    if not await check_sub(message.from_user.id):
-        return
+@bot.message_handler(func=lambda message: message.text == '⭐ Магазин')
+@subscription_required
+def shop_menu(message):
     user = get_user(message.from_user.id)
-    if user["coins"] < 100:
-        await message.answer("❌ Недостаточно монет (нужно минимум 100)!")
+    bot.send_message(message.chat.id, 
+                    f"🏪 <b>МАГАЗИН</b>\n━━━━━━━━━━━━━━━\n"
+                    f"💰 Баланс: <code>{user[1]}</code>\n"
+                    f"🐷 Свиней: <code>{user[2]}</code>\n━━━━━━━━━━━━━━━\n"
+                    "🐷 Свинья - 500 монет\n"
+                    "👑 VIP - 5000 монет\n"
+                    "⭐ Звезды - лучший курс",
+                    parse_mode='HTML', reply_markup=get_shop_keyboard())
+
+@bot.message_handler(func=lambda message: message.text == '📤 Слив')
+@subscription_required
+def propose_menu(message):
+    bot.send_message(message.chat.id, 
+                    "📤 <b>ПРЕДЛОЖИТЬ СЛИВ</b>\n━━━━━━━━━━━━━━━\n"
+                    "Ответь на сообщение командой:\n"
+                    "<code>/propose</code>\n\n"
+                    "Или просто отправь мне контент",
+                    parse_mode='HTML', reply_markup=get_main_keyboard())
+
+# ================= ОБРАБОТЧИКИ ИГР =================
+@bot.message_handler(func=lambda message: message.text == '🎲 Кости')
+@subscription_required
+def dice_game(message):
+    user = get_user(message.from_user.id)
+    bet = 50
+    if user[1] < bet:
+        bot.send_message(message.chat.id, f"❌ Недостаточно монет! Нужно {bet}", 
+                        reply_markup=get_casino_keyboard())
         return
 
-    user["coins"] -= 100
-    win = random.choice([True, False])
-    multiplier = 2.5 if user["vip"] else 2.0
-    reward = int(100 * multiplier)
+    update_balance(message.from_user.id, -bet)
+    result = random.randint(1, 6)
+    win = result == 6
 
     if win:
-        user["coins"] += reward
-        user["wins"] += 1
-        await message.answer(f"💣💥 Победа! Начислено +{reward} монет {'(С учетом ВИП)' if user['vip'] else ''}!")
+        reward = bet * 3
+        update_balance(message.from_user.id, reward)
+        bot.send_message(message.chat.id, 
+                        f"🎲 <b>ВЫПАЛО: {result}</b>\n━━━━━━━━━━━━━━━\n"
+                        f"🎉 ПОБЕДА! +{reward} монет!",
+                        parse_mode='HTML', reply_markup=get_casino_keyboard())
     else:
-        user["losses"] += 1
-        await message.answer("💥 Ты подорвался на мине! -100 монет.")
+        bot.send_message(message.chat.id, 
+                        f"🎲 <b>ВЫПАЛО: {result}</b>\n━━━━━━━━━━━━━━━\n"
+                        f"😢 Проигрыш! -{bet} монет",
+                        parse_mode='HTML', reply_markup=get_casino_keyboard())
 
-class SlivState(StatesGroup):
-    waiting_for_content = State()
-
-@router.callback_query(F.data == "suggest_sliv")
-async def start_suggest(callback: CallbackQuery, state: FSMContext):
-    if not await check_sub(callback.from_user.id):
-        await callback.answer("❌ Подпишись на канал!", show_alert=True)
+@bot.message_handler(func=lambda message: message.text == '🎰 Слоты')
+@subscription_required
+def slots_game(message):
+    user = get_user(message.from_user.id)
+    bet = 100
+    if user[1] < bet:
+        bot.send_message(message.chat.id, f"❌ Недостаточно монет! Нужно {bet}",
+                        reply_markup=get_casino_keyboard())
         return
 
-    await callback.message.answer("📥 Отправь то, что хочешь слить (ссылку, текст, фото или видео). Всё уйдет абсолютно анонимно:")
-    await state.set_state(SlivState.waiting_for_content)
-    await callback.answer()
+    update_balance(message.from_user.id, -bet)
+    symbols = ['🍒', '🍋', '🍊', '🍇', '💎', '7️⃣']
+    result = [random.choice(symbols) for _ in range(3)]
 
-@router.message(SlivState.waiting_for_content)
-async def process_sliv(message: Message, state: FSMContext):
-    if not await check_sub(message.from_user.id):
-        await message.answer("❌ Подпишись на канал!")
+    if result[0] == result[1] == result[2]:
+        if result[0] == '7️⃣':
+            reward = bet * 10
+        elif result[0] == '💎':
+            reward = bet * 5
+        else:
+            reward = bet * 3
+        update_balance(message.from_user.id, reward)
+        bot.send_message(message.chat.id, 
+                        f"🎰 <b>{' '.join(result)}</b>\n━━━━━━━━━━━━━━━\n"
+                        f"🎉 ДЖЕКПОТ! +{reward} монет!",
+                        parse_mode='HTML', reply_markup=get_casino_keyboard())
+    elif result[0] == result[1] or result[1] == result[2] or result[0] == result[2]:
+        reward = bet * 2
+        update_balance(message.from_user.id, reward)
+        bot.send_message(message.chat.id, 
+                        f"🎰 <b>{' '.join(result)}</b>\n━━━━━━━━━━━━━━━\n"
+                        f"🎉 Выигрыш! +{reward} монет!",
+                        parse_mode='HTML', reply_markup=get_casino_keyboard())
+    else:
+        bot.send_message(message.chat.id, 
+                        f"🎰 <b>{' '.join(result)}</b>\n━━━━━━━━━━━━━━━\n"
+                        f"😢 Проигрыш! -{bet} монет",
+                        parse_mode='HTML', reply_markup=get_casino_keyboard())
+
+@bot.message_handler(func=lambda message: message.text == '🪙 Орел/Решка')
+@subscription_required
+def coin_game(message):
+    user = get_user(message.from_user.id)
+    bet = 25
+    if user[1] < bet:
+        bot.send_message(message.chat.id, f"❌ Недостаточно монет! Нужно {bet}",
+                        reply_markup=get_casino_keyboard())
         return
 
-    # Пересылаем саму предложку СОВЕРШЕННО ЧИСТО (без каких-либо прицепленных кнопок на ней)
-    forwarded = await message.forward(chat_id=ADMIN_CHAT_ID)
+    update_balance(message.from_user.id, -bet)
+    result = random.choice(['Орел', 'Решка'])
 
-    # Кнопку подтверждения отправляем отдельным сообщением СНИЗУ
-    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подтвердить слив", callback_data=f"approve_{forwarded.message_id}")]
-    ])
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🦅 Орел", callback_data=f"coin_Орел_{bet}"),
+        types.InlineKeyboardButton("🪙 Решка", callback_data=f"coin_Решка_{bet}")
+    )
+    bot.send_message(message.chat.id, "Выбери сторону:", reply_markup=markup)
 
-    try:
-        await bot.send_message(ADMIN_CHAT_ID, f"📥 Новая предложка от пользователя `{message.from_user.id}`:", reply_markup=admin_kb, parse_mode="Markdown")
-    except Exception as e:
-        print(f"Ошибка отправки кнопки в админ-чат: {e}")
+@bot.callback_query_handler(func=lambda call: call.data.startswith('coin_'))
+def coin_callback(call):
+    _, choice, bet = call.data.split('_')
+    bet = int(bet)
+    result = random.choice(['Орел', 'Решка'])
 
-    await message.answer("👀 Твоя предложка отправлена на проверку модераторам.")
-    await state.clear()
+    if choice == result:
+        reward = bet * 2
+        update_balance(call.from_user.id, reward)
+        bot.edit_message_text(f"🪙 <b>{result}</b>\n━━━━━━━━━━━━━━━\n🎉 Угадал! +{reward} монет!",
+                            call.message.chat.id, call.message.message_id, parse_mode='HTML')
+    else:
+        bot.edit_message_text(f"🪙 <b>{result}</b>\n━━━━━━━━━━━━━━━\n😢 Не угадал! -{bet} монет",
+                            call.message.chat.id, call.message.message_id, parse_mode='HTML')
+    bot.answer_callback_query(call.id)
 
-@router.callback_query(F.data.startswith("approve_"))
-async def approve_sliv_handler(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("❌ У тебя нет прав администратора!", show_alert=True)
+@bot.message_handler(func=lambda message: message.text == '💣 Мины')
+@subscription_required
+def mines_game(message):
+    user = get_user(message.from_user.id)
+    bet = 200
+    if user[1] < bet:
+        bot.send_message(message.chat.id, f"❌ Недостаточно монет! Нужно {bet}",
+                        reply_markup=get_casino_keyboard())
         return
 
-    msg_id = int(callback.data.split("_")[1])
-    try:
-        await bot.copy_message(
-            chat_id=CHANNEL_ID,
-            from_chat_id=callback.message.chat.id,
-            message_id=msg_id
-        )
-        await callback.answer("✅ Успешно опубликовано в канал кристально чисто и анонимно!", show_alert=True)
-        await callback.message.delete()
-    except Exception as e:
-        await callback.answer(f"❌ Ошибка публикации: {e}", show_alert=True)
+    multiplier = VIP_MULTIPLIER if check_vip(message.from_user.id) else NORMAL_MULTIPLIER
+    update_balance(message.from_user.id, -bet)
 
-class AdminStates(StatesGroup):
-    waiting_for_coins = State()
-    waiting_for_vip = State()
-    waiting_for_welcome = State()
-    waiting_for_mirror_user = State()
+    markup = types.InlineKeyboardMarkup(row_width=5)
+    for i in range(1, 11):
+        markup.add(types.InlineKeyboardButton(f"{i}", callback_data=f"mine_{i}_{bet}_{multiplier}"))
 
-@router.callback_query(F.data == "admin_panel")
-async def admin_panel_handler(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("❌ Доступ запрещен!", show_alert=True)
-        return
+    bot.send_message(message.chat.id, 
+                    f"💣 <b>МИНЫ</b>\n━━━━━━━━━━━━━━━\n"
+                    f"💰 Ставка: {bet}\n"
+                    f"📈 Множитель: x{multiplier}\n"
+                    f"Выбери клетку (1-10):",
+                    parse_mode='HTML', reply_markup=markup)
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🪙 Накрутить монеты", callback_data="adm_coins")],
-        [InlineKeyboardButton(text="👑 Выдать/Забрать ВИП", callback_data="adm_vip")],
-        [InlineKeyboardButton(text="✏️ Изменить приветствие", callback_data="adm_welcome")],
-        [InlineKeyboardButton(text="🌐 Создать зеркало (Разрешение)", callback_data="adm_mirror")],
-        [InlineKeyboardButton(text="❌ Закрыть", callback_data="close_admin")]
-    ])
-    await callback.message.edit_text("👑 **Онлайн Админ-панель**\n\nВыбери нужное действие:", reply_markup=kb, parse_mode="Markdown")
-    await callback.answer()
-
-@router.callback_query(F.data == "close_admin")
-async def close_admin_handler(callback: CallbackQuery):
-    await callback.message.edit_text("Панель закрыта.", reply_markup=get_main_keyboard(True))
-
-@router.callback_query(F.data == "adm_coins")
-async def adm_coins_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-    await callback.message.answer("Введи `USER_ID` и количество монет через пробел (Пример: `123456789 5000`):", parse_mode="Markdown")
-    await state.set_state(AdminStates.waiting_for_coins)
-    await callback.answer()
-
-@router.message(AdminStates.waiting_for_coins)
-async def adm_coins_process(message: Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        parts = message.text.split()
-        target_id = int(parts[0])
-        amount = int(parts[1])
-        user = get_user(target_id)
-        user["coins"] += amount
-        await message.answer(f"✅ Успешно! Пользователю `{target_id}` начислено монет. Баланс: {user['coins']}", parse_mode="Markdown")
-    except Exception:
-        await message.answer("❌ Ошибка в формате! Пиши так: `ID_ПОЛЬЗОВАТЕЛЯ КОЛИЧЕСТВО`", parse_mode="Markdown")
-    await state.clear()
-
-@router.callback_query(F.data == "adm_vip")
-async def adm_vip_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-    await callback.message.answer("Введи `USER_ID` пользователя для переключения ВИП статуса:", parse_mode="Markdown")
-    await state.set_state(AdminStates.waiting_for_vip)
-    await callback.answer()
-
-@router.message(AdminStates.waiting_for_vip)
-async def adm_vip_process(message: Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        target_id = int(message.text.strip())
-        user = get_user(target_id)
-        user["vip"] = not user["vip"]
-        status_str = "Активен (👑 ВИП)" if user["vip"] else "Снят"
-        await message.answer(f"✅ Статус ВИП для `{target_id}` изменен на: {status_str}", parse_mode="Markdown")
-    except Exception:
-        await message.answer("❌ Ошибка! Введи корректный числовой ID.")
-    await state.clear()
-
-@router.callback_query(F.data == "adm_welcome")
-async def adm_welcome_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-    await callback.message.answer("Отправь новый текст приветствия для команды /start:")
-    await state.set_state(AdminStates.waiting_for_welcome)
-    await callback.answer()
-
-@router.message(AdminStates.waiting_for_welcome)
-async def adm_welcome_process(message: Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    bot_settings["welcome_text"] = message.text
-    await message.answer("✅ Текст приветствия успешно обновлен онлайн!")
-    await state.clear()
-
-@router.callback_query(F.data == "adm_mirror")
-async def adm_mirror_start(callback: CallbackQuery, state: FSNContext if 'FSNC' in globals() else FSMContext):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-    await callback.message.answer("Введи `USER_ID` или юзернейм человека, которому даешь разрешение на создание зеркала:", parse_mode="Markdown")
-    await state.set_state(AdminStates.waiting_for_mirror_user)
-    await callback.answer()
-
-@router.message(AdminStates.waiting_for_mirror_user)
-async def adm_mirror_process(message: Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    target = message.text.strip()
-    await message.answer(f"✅ Разрешение на зеркало для `{target}` успешно выдано!", parse_mode="Markdown")
-    await state.clear()
-
-@router.callback_query(F.data == "swine_menu")
-async def cb_swine(callback: CallbackQuery):
-    if not await check_sub(callback.from_user.id):
-        await callback.answer("❌ Подпишись на канал!", show_alert=True)
-        return
-    await callback.message.answer("🐷 Раздел свиней и обмена активен.")
-    await callback.answer()
-
-@router.callback_query(F.data == "casino_menu")
-async def cb_casino(callback: CallbackQuery):
-    if not await check_sub(callback.from_user.id):
-        await callback.answer("❌ Подпишись на канал!", show_alert=True)
-        return
-    await callback.message.answer("🎰 Меню казино. Доступные игры: /dice, /slots, /coin, /mines.")
-    await callback.answer()
-
-async def main():
-    print("Идеальный бот запущен!")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
+@bot.callback_query_handler(func
