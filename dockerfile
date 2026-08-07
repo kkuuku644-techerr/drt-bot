@@ -1,6 +1,18 @@
-FROM python:3.10-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-CMD ["python", "bot.py"]
+
+==> Проверка конфигурации приложения
+
+Проверка файла fly.toml
+
+✓ Конфигурация действительна
+
+--> Проверена конфигурация приложения
+
+==> Изображение здания
+
+==> Изображение здания
+
+Ошибка: не удалось загрузить образ или собрать проект из исходного кода: несанкционированный доступ (Идентификатор запроса: 01KZDJFNQ7R294TK4EM2QB4J13-iad) (Идентификатор трассировки: 32480afc08c767fcb676d03720b2bfae)
+
+Ошибка сборки Dockerfile
+
+Неудачная попытка выполнить команду 'flyctl deploy --build-only --push -a drt-bot --image-label deployment-df7aaa9e1544efc1605f770c463f8eee --config fly.toml'
