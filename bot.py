@@ -1,6 +1,7 @@
 import json
 import random
 import sqlite3
+import time
 import telebot
 from telebot import types
 
@@ -22,6 +23,7 @@ def init_db():
                     balance INTEGER DEFAULT 1000,
                     pigs INTEGER DEFAULT 5,
                     is_vip INTEGER DEFAULT 0,
+                    vip_expire INTEGER DEFAULT 0,
                     passport TEXT DEFAULT '')''')
     conn.commit()
     conn.close()
@@ -31,13 +33,22 @@ def get_user(user_id, username=''):
     cur = conn.cursor()
     cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
     user = cur.fetchone()
+    now = int(time.time())
+
     if not user:
-        cur.execute("INSERT INTO users (user_id, username, balance, pigs, passport) VALUES (?, ?, ?, ?, ?)", 
+        cur.execute("INSERT INTO users (user_id, username, balance, pigs, is_vip, vip_expire, passport) VALUES (?, ?, ?, ?, 0, 0, ?)", 
                    (user_id, username, 1000, 5, ''))
         conn.commit()
         cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
         user = cur.fetchone()
     else:
+        # Проверка истечения VIP (1 месяц = 30 дней = 2592000 секунд)
+        if user[4] == 1 and user[5] > 0 and now > user[5]:
+            cur.execute("UPDATE users SET is_vip = 0, vip_expire = 0 WHERE user_id=?", (user_id,))
+            conn.commit()
+            cur.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+            user = cur.fetchone()
+
         if username and user[1] != username:
             cur.execute("UPDATE users SET username=? WHERE user_id=?", (username, user_id))
             conn.commit()
@@ -58,10 +69,18 @@ def update_pigs(user_id, amount):
     conn.commit()
     conn.close()
 
+def set_vip_status(user_id, days=30):
+    conn = sqlite3.connect('bot.db')
+    cur = conn.cursor()
+    expire_time = int(time.time()) + (days * 24 * 60 * 60)
+    cur.execute("UPDATE users SET is_vip = 1, vip_expire = ? WHERE user_id=?", (expire_time, user_id))
+    conn.commit()
+    conn.close()
+
 def get_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    markup.add('🎰 Казино', '💳 Профиль', '📋 Паспорт')
-    markup.add('🐷 Свиньи', '⭐ VIP за звезды', '📤 Слив')
+    markup.add('🎰 Казино', '📋 Паспорт')
+    markup.add('⭐ VIP за звезды', '📤 Слив')
     return markup
 
 def get_casino_keyboard():
@@ -80,17 +99,18 @@ def back_to_main(message):
     bot.send_message(message.chat.id, "Главное меню:", reply_markup=get_main_keyboard())
 
 @bot.message_handler(commands=['б'])
-@bot.message_handler(func=lambda m: m.text in ['💳 Баланс', '💳 Профиль'])
-def balance_menu(message):
+def balance_command(message):
     target_user = message.from_user
     if message.reply_to_message:
         target_user = message.reply_to_message.from_user
 
     user = get_user(target_user.id, target_user.username or '')
-    vip = "👑 Да" if user[4] else "❌ Нет"
+    now = int(time.time())
+    is_active_vip = user[4] == 1 and (user[5] == 0 or user[5] > now)
+    vip = "👑 Да" if is_active_vip else "❌ Нет"
     uname = f"@{target_user.username}" if target_user.username else "Нет юзернейма"
 
-    text = (f"💳 <b>Профиль игрока:</b>\n"
+    text = (f"💳 <b>Баланс игрока:</b>\n"
             f"👤 Имя: {target_user.first_name}\n"
             f"🔗 Юзер: {uname}\n"
             f"🆔 ID: <code>{target_user.id}</code>\n"
@@ -229,24 +249,19 @@ def passport_menu(message):
             f"━━━━━━━━━━━━━━━━━━━━━")
     bot.send_message(message.chat.id, text, parse_mode='HTML')
 
-@bot.message_handler(func=lambda m: m.text == '🐷 Свиньи')
-def pigs_info(message):
-    user = get_user(message.from_user.id, message.from_user.username or '')
-    bot.send_message(message.chat.id, f"🐷 У тебя на балансе: <b>{user[3]}</b> свиней.", parse_mode='HTML')
-
 @bot.message_handler(func=lambda m: m.text == '⭐ VIP за звезды')
 def buy_vip_stars(message):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("⭐ Оплатить 25 Telegram Stars", callback_data="pay_vip_stars"))
-    bot.send_message(message.chat.id, "👑 <b>Покупка VIP-статуса</b>\nСтоимость: <b>25 ⭐</b>", parse_mode='HTML', reply_markup=markup)
+    bot.send_message(message.chat.id, "👑 <b>Покупка VIP-статуса (на 1 месяц)</b>\nСтоимость: <b>25 ⭐</b>", parse_mode='HTML', reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "pay_vip_stars")
 def process_star_payment(call):
-    prices = [types.LabeledPrice(label="VIP статус", amount=25)]
+    prices = [types.LabeledPrice(label="VIP статус (1 месяц)", amount=25)]
     bot.send_invoice(
         chat_id=call.message.chat.id,
         title="👑 VIP Статус",
-        description="Премиум-статус",
+        description="Премиум-статус на 1 месяц",
         invoice_payload="vip_stars",
         provider_token="",
         currency="XTR",
@@ -260,12 +275,8 @@ def checkout(pre_checkout_query):
 
 @bot.message_handler(content_types=['successful_payment'])
 def got_payment(message):
-    conn = sqlite3.connect('bot.db')
-    cur = conn.cursor()
-    cur.execute("UPDATE users SET is_vip = 1 WHERE user_id=?", (message.from_user.id,))
-    conn.commit()
-    conn.close()
-    bot.send_message(message.chat.id, "🎉 <b>Оплата прошла успешно! VIP выдан!</b>", parse_mode='HTML')
+    set_vip_status(message.from_user.id, days=30)
+    bot.send_message(message.chat.id, "🎉 <b>Оплата прошла успешно! VIP-статус выдан на 1 месяц!</b>", parse_mode='HTML')
 
 @bot.message_handler(func=lambda m: m.text in ['📤 Слив', '📤 Предложить слив'])
 def propose_slip(message):
@@ -287,8 +298,9 @@ def forward_to_admin(message):
     )
 
     try:
-        sent = bot.forward_message(ADMIN_CHAT_ID, message.chat.id, message.message_id)
-        bot.send_message(ADMIN_CHAT_ID, f"📥 Предложка от <code>{user_id}</code>:", parse_mode='HTML', reply_markup=markup, reply_to_message_id=sent.message_id)
+        # Используем отправку копии сообщения, чтобы избежать ошибок пересылки из защищенных чатов
+        bot.copy_message(ADMIN_CHAT_ID, message.chat.id, message.message_id, reply_markup=markup)
+        bot.send_message(ADMIN_CHAT_ID, f"📥 Предложка от <code>{user_id}</code>:", parse_mode='HTML')
         bot.send_message(message.chat.id, "✅ Отправлено на проверку администратору!", reply_markup=get_main_keyboard())
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка отправки: {e}", reply_markup=get_main_keyboard())
@@ -302,14 +314,16 @@ def admin_slip_handler(call):
         chat_id, msg_id, user_id = int(data[1]), int(data[2]), int(data[3])
         try:
             bot.copy_message(CHANNEL_ID, chat_id, msg_id)
-            bot.edit_message_text("✅ Опубликовано в канал!", call.message.chat.id, call.message.message_id)
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+            bot.send_message(call.message.chat.id, "✅ Опубликовано в канал!")
             bot.send_message(user_id, "🎉 Твой слив был успешно принят и опубликован в канале!")
         except Exception as e:
             bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
     elif action == 'reject':
         user_id = int(data[1])
         try:
-            bot.edit_message_text("❌ Предложка отклонена.", call.message.chat.id, call.message.message_id)
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+            bot.send_message(call.message.chat.id, "❌ Предложка отклонена.")
             bot.send_message(user_id, "❌ К сожалению, твой слив был отклонен администратором.")
         except Exception as e:
             bot.answer_callback_query(call.id, f"Ошибка: {e}", show_alert=True)
@@ -320,21 +334,28 @@ def admin_slip_handler(call):
 def admin_panel(message):
     if message.from_user.id not in ADMIN_IDS:
         return
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("➕ Накрутить монеты", callback_data="adm_coins"))
-    markup.add(types.InlineKeyboardButton("🐷 Накрутить свиней", callback_data="adm_pigs"))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("➕ Монеты", callback_data="adm_coins"),
+        types.InlineKeyboardButton("🐷 Свиньи", callback_data="adm_pigs"),
+        types.InlineKeyboardButton("👑 Выдать VIP (30 дней)", callback_data="adm_vip")
+    )
     bot.send_message(message.chat.id, "👑 <b>Админ-панель:</b>", parse_mode='HTML', reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data in ["adm_coins", "adm_pigs"])
+@bot.callback_query_handler(func=lambda call: call.data in ["adm_coins", "adm_pigs", "adm_vip"])
 def adm_action_step(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     action = call.data
-    msg = bot.send_message(call.message.chat.id, "✍️ Введи ID и количество через пробел:\n<code>ID сумма</code>", parse_mode='HTML')
-    if action == "adm_coins":
-        bot.register_next_step_handler(msg, process_add_coins)
+    if action == "adm_vip":
+        msg = bot.send_message(call.message.chat.id, "✍️ Введи ID игрока для выдачи VIP на 30 дней:\n<code>ID</code>", parse_mode='HTML')
+        bot.register_next_step_handler(msg, process_add_vip)
     else:
-        bot.register_next_step_handler(msg, process_add_pigs)
+        msg = bot.send_message(call.message.chat.id, "✍️ Введи ID и количество через пробел:\n<code>ID сумма</code>", parse_mode='HTML')
+        if action == "adm_coins":
+            bot.register_next_step_handler(msg, process_add_coins)
+        else:
+            bot.register_next_step_handler(msg, process_add_pigs)
     bot.answer_callback_query(call.id)
 
 def process_add_coins(message):
@@ -356,6 +377,15 @@ def process_add_pigs(message):
         bot.send_message(message.chat.id, f"✅ Добавлено {amount} свиней игроку <code>{target_id}</code>!", parse_mode='HTML')
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка: {e}")
+
+def process_add_vip(message):
+    if message.from_user.id not in ADMIN_IDS: return
+    try:
+        target_id = int(message.text.strip())
+        set_vip_status(target_id, days=30)
+        bot.send_message(message.chat.id, f"✅ VIP-статус на 30 дней успешно выдан игроку <code>{target_id}</code>!", parse_mode='HTML')
+    except Exception as e:
+        bot.send_message(message.chat.id, f>f"❌ Ошибка: {e}")
 
 if __name__ == "__main__":
     init_db()
