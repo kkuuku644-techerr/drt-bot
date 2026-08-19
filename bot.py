@@ -71,7 +71,7 @@ async def bot_added_to_chat(event):
     if event.from_user.id != ADMIN_ID:
       await bot.send_message(
           event.chat.id,
-          "❌ Йоу, этот бот приватный и принадлежит моему создателю!",
+          "❌ нужно потверждение от короля на добавление, отказано нахцй",
       )
       await bot.leave_chat(event.chat.id)
 
@@ -147,8 +147,8 @@ async def cmd_start(message: Message):
         )
 
   text = (
-      "👋 Здарова! Добро пожаловать в наш бот.\nЖми на кнопки ниже или юзай"
-      " команды в чате!"
+      "👋 привет! используй нужную кнопку или импользуй "
+      " команду в чате "
   )
 
   if message.chat.type == "private":
@@ -182,7 +182,7 @@ async def callback_handler(callback: CallbackQuery):
 
   elif action == "balance":
     await callback.message.edit_text(
-        f"🪙 Твой текущий баланс: `{bal}` монет. Неплохо, но можно и больше! 😎",
+        f"🪙 Твой текущий баланс: `{bal}` монет. !монеты можно заработать в ежедневных бонусах либо пригласив друга по реф ссылке",
         reply_markup=back_kb,
         parse_mode="Markdown",
     )
@@ -190,8 +190,8 @@ async def callback_handler(callback: CallbackQuery):
   elif action == "games":
     text = (
         "🎰 **Казино и Игры:**\n\nМожешь играть прямо в чатах с помощью"
-        " команд:\n• `/slots <ставка>` — Слоты\n• `/dice <ставка>` —"
-        " Кубик\n• `/mines <ставка>` — Мины\n\n⚡️ Минимальная ставка: `5` монет"
+        " команд:\n• `/slots <ставка>` — Слоты\n• `/dice ставка` —"
+        " Кубик\n• `/mines ставка` — Мины\n\n⚡️ Минимальная ставка: `5` монет"
         " (VIP дает x2 к выигрышу и +15% удачи в минах!)"
     )
     await callback.message.edit_text(
