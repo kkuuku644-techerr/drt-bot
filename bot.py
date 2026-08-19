@@ -397,14 +397,146 @@ async def cmd_ref(message: Message):
 
 
 # --- ПЛАТЕЖИ СО ЗВЕЗДАМИ ---
+# --- ПЛАТЕЖИ СО ЗВЕЗДАМИ ---
 @router.message(Command("buy_coins"))
 async def buy_coins(message: Message):
-  args = message.text.split()
-  if len(args) < 2 or not args[1].isdigit():
-    return await message.answer("Формат: `/buy_coins <количество>`")
-  amount = int(args[1])
-  await message.answer_invoice(
-      title="Покупка монет",
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        return await message.answer("Формат: /buy_coins <количество>", parse_mode="Markdown")
+    amount = int(args[1])
+    await message.answer_invoice(
+        title="Покупка монет",
+        description=f"Покупка {amount} монет (1 звезда = 1 монета)",
+        prices=[LabeledPrice(label="Монеты", amount=amount)],
+        payload=f"buy_coins_{amount}",
+        currency="XTR",
+    )
+
+
+@router.message(Command("buy_vip"))
+async def buy_vip(message: Message):
+    await message.answer_invoice(
+        title="VIP Статус на 30 дней",
+        description="Бусты: x2 к монетам в играх и +15% удачи в минах!",
+        prices=[LabeledPrice(label="VIP", amount=25)],
+        payload="buy_vip_30",
+        currency="XTR",
+    )
+
+
+@router.pre_checkout_query()
+async def pre_checkout(q):
+    await bot.answer_pre_checkout_query(q.id, ok=True)
+
+
+@router.message(F.successful_payment)
+async def success_pay(message: Message):
+    payload = message.successful_payment.invoice_payload
+    user_id = message.from_user.id
+    if payload.startswith("buy_coins_"):
+        count = int(payload.split("_")[2])
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (count, user_id))
+    elif payload == "buy_vip_30":
+        exp = (datetime.now() + timedelta(days=30)).isoformat()
+        cursor.execute("UPDATE users SET vip_expires = ? WHERE user_id = ?", (exp, user_id))
+    conn.commit()
+    await message.answer("✅ Оплата прошла успешно! Благодарю за поддержку.")
+
+
+# --- ИГРЫ КАЗИНО (Универсальный блок) ---
+@router.message(Command("slots", "dice", "mines"))
+async def play_games(message: Message):
+    text_parts = message.text.split()
+    cmd = text_parts[0].replace("/", "").split("@")[0]
+    
+    if len(text_parts) < 2 or not text_parts[1].isdigit():
+        return await message.answer(f"❌ Формат: /{cmd} <ставка>", parse_mode="Markdown")
+
+    bet = int(text_parts[1])
+    if bet < 5:
+        return await message.answer("❌ Минимальная ставка — 5 монет.")
+
+    bal, vip_exp, _ = get_user_data(message.from_user.id)
+    if bal < bet:
+        return await message.answer("❌ Мало монет на балансе!")
+
+    cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, message.from_user.id))
+    
+    if cmd == "slots":
+        msg = await message.answer_dice("🎰")
+        await asyncio.sleep(2.5)
+        if msg.dice.value in [1, 22, 43, 64]:
+            win = (bet * 5) * (2 if is_vip(vip_exp) else 1)
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, message.from_user.id))
+            await message.answer(f"🎰 ДЖЕКПОТ! Выиграл {win} монет!", parse_mode="Markdown")
+        else:
+            await message.answer("😢 Мимо, бро. Повезет в следующий раз.")
+            
+    elif cmd == "dice":
+        msg = await message.answer_dice("🎲")
+        await asyncio.sleep(3)
+        if msg.dice.value >= 4:
+            win = (bet * 2) * (2 if is_vip(vip_exp) else 1)
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, message.from_user.id))
+            await message.answer(f"🎯 Выпало {msg.dice.value}! Забирай выигрыш: {win} монет!", parse_mode="Markdown")
+        else:
+            await message.answer(f"😢 Выпало {msg.dice.value}. Луз.")
+            
+    elif cmd == "mines":
+        chance = 0.25 - (0.15 if is_vip(vip_exp) else 0)
+        if random.random() > chance:
+            win = int(bet * 2) * (2 if is_vip(vip_exp) else 1)
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, message.from_user.id))
+            await message.answer(f"💰 Изи катка! Поле чистое. Выигрыш: {win} монет!", parse_mode="Markdown")
+        else:
+            await message.answer("💥 БУХ! Нарвался на мину, луз.", parse_mode="Markdown")
+            
+    conn.commit()# --- ПЛАТЕЖИ СО ЗВЕЗДАМИ ---
+@router.message(Command("buy_coins"))
+async def buy_coins(message: Message):
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        return await message.answer("Формат: /buy_coins <количество>", parse_mode="Markdown")
+    amount = int(args[1])
+    await message.answer_invoice(
+        title="Покупка монет",
+        description=f"Покупка {amount} монет (1 звезда = 1 монета)",
+        prices=[LabeledPrice(label="Монеты", amount=amount)],
+        payload=f"buy_coins_{amount}",
+        currency="XTR",
+    )
+
+
+@router.message(Command("buy_vip"))
+async def buy_vip(message: Message):
+    await message.answer_invoice(
+        title="VIP Статус на 30 дней",
+        description="Бусты: x2 к монетам в играх и +15% удачи в минах!",
+        prices=[LabeledPrice(label="VIP", amount=25)],
+        payload="buy_vip_30",
+        currency="XTR",
+    )
+
+
+@router.pre_checkout_query()
+async def pre_checkout(q):
+    await bot.answer_pre_checkout_query(q.id, ok=True)
+
+
+@router.message(F.successful_payment)
+async def success_pay(message: Message):
+    payload = message.successful_payment.invoice_payload
+    user_id = message.from_user.id
+    if payload.startswith("buy_coins_"):
+        count = int(payload.split("_")[2])
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (count, user_id))
+    elif payload == "buy_vip_30":
+        exp = (datetime.now() + timedelta(days=30)).isoformat()
+        cursor.execute("UPDATE users SET vip_expires = ? WHERE user_id = ?", (exp, user_id))
+    conn.commit()
+    await message.answer("✅ Оплата прошла успешно! Благодарю за поддержку.")
+
+
 # --- ИГРЫ КАЗИНО (Универсальный блок) ---
 @router.message(Command("slots", "dice", "mines"))
 async def play_games(message: Message):
@@ -454,15 +586,3 @@ async def play_games(message: Message):
             await message.answer("💥 БУХ! Нарвался на мину, луз.", parse_mode="Markdown")
             
     conn.commit()
-  conn.commit()
-
-
-async def main():
-  dp.include_router(router)
-  await bot.delete_webhook(drop_pending_updates=True)
-  await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-  asyncio.run(main())
-
