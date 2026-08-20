@@ -13,7 +13,7 @@ from aiogram.types import (
 )
 
 # Инициализация бота и базы данных
-TOKEN = "ТВОЙ_ТОКЕН_БОТА"  # Твой токен подтянется из переменных окружения на Railway, если прописан там
+TOKEN = "ТВОЙ_ТОКЕН_БОТА"  # Токен подтянется из переменных окружения на Railway
 bot = Bot(token=TOKEN)
 router = Router()
 dp = Dispatcher()
@@ -100,7 +100,7 @@ async def cmd_start(message: Message):
 async def cb_profile(callback: CallbackQuery):
     user_id = callback.from_user.id
     bal, vip_exp, _ = get_user_data(user_id)
-    vip_status = "💎 VIP Активен" if is_vip(vip_exp) else "❌ Обычный"
+    vip_status = "💎 VIP Активен" if is_vip(vip_exp) else "Обычный"
 
     text = (
         f"👤 **Ваш профиль:**\n"
@@ -144,145 +144,134 @@ async def cb_ref(callback: CallbackQuery):
     await callback.answer()
 
 
-# --- ТЕКСТОВЫЕ КОМАНДЫ БЕЗ СЛЭША ---
+# --- ЕДИНЫЙ ОБРАБОТЧИК ТЕКСТОВЫХ КОМАНД БЕЗ СЛЭША ---
+@router.message(F.text)
+async def text_commands_router(message: Message):
+    if not message.text:
+        return
 
-@router.message(F.text.lower().in_({"б", "баланс"}))
-async def text_balance(message: Message):
-    bal, _, _ = get_user_data(message.from_user.id)
-    await message.answer(f"💰 Ваш баланс: `{bal}` монет", parse_mode="Markdown")
+    text_lower = message.text.lower().strip()
+    parts = text_lower.split()
+    if not parts:
+        return
 
-
-@router.message(F.text.lower() == "паспорт")
-async def text_passport(message: Message):
-    user_id = message.from_user.id
-    bal, vip_exp, _ = get_user_data(user_id)
-    vip_status = "💎 VIP" — "Обычный" if not is_vip(vip_exp) else "💎 VIP Активен"
-    text = (
-        f"📜 **Паспорт игрока:**\n"
-        f"👤 Имя: {message.from_user.first_name}\n"
-        f"🆔 ID: `{user_id}`\n"
-        f"💰 Монеты: `{bal}`\n"
-        f"🌟 Уровень: {vip_status}"
-    )
-    await message.answer(text, parse_mode="Markdown")
-
-
-# --- АКТИВАЦИЯ ПРОМОКОДОВ (Исправлено с commit) ---
-@router.message(F.text.lower().startswith("промо "))
-async def text_promo(message: Message):
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        return await message.answer("❌ Укажите код промокода. Пример: `промо START`", parse_mode="Markdown")
-
-    code = args[1].strip().upper()
+    cmd = parts[0]
     user_id = message.from_user.id
 
-    # Проверяем существование промокода
-    cursor.execute("SELECT reward FROM promos WHERE code = ?", (code,))
-    promo = cursor.fetchone()
-    if not promo:
-        return await message.answer("❌ Такого промокода не существует.")
+    # 1. Баланс
+    if cmd in ("б", "баланс"):
+        bal, _, _ = get_user_data(user_id)
+        return await message.answer(f"💰 Ваш баланс: `{bal}` монет", parse_mode="Markdown")
 
-    reward = promo[0]
+    # 2. Паспорт
+    elif cmd == "паспорт":
+        bal, vip_exp, _ = get_user_data(user_id)
+        vip_status = "💎 VIP Активен" if is_vip(vip_exp) else "Обычный"
+        text = (
+            f"📜 **Паспорт игрока:**\n"
+            f"👤 Имя: {message.from_user.first_name}\n"
+            f"🆔 ID: `{user_id}`\n"
+            f"💰 Монеты: `{bal}`\n"
+            f"🌟 Уровень: {vip_status}"
+        )
+        return await message.answer(text, parse_mode="Markdown")
 
-    # Проверяем, активировал ли пользователь этот промокод ранее
-    cursor.execute("SELECT * FROM used_promos WHERE user_id = ? AND code = ?", (user_id, code))
-    if cursor.fetchone():
-        return await message.answer("❌ Вы уже активировали этот промокод!")
+    # 3. Промокоды
+    elif cmd == "промо":
+        if len(parts) < 2:
+            return await message.answer("❌ Укажите код промокода. Пример: `промо START`", parse_mode="Markdown")
+        code = parts[1].upper()
 
-    # Начисляем монеты и фиксируем использование
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (reward, user_id))
-    cursor.execute("INSERT INTO used_promos (user_id, code) VALUES (?, ?)", (user_id, code))
-    conn.commit()  # ГАРАНТИРОВАННОЕ СОХРАНЕНИЕ В БАЗУ
+        cursor.execute("SELECT reward FROM promos WHERE code = ?", (code,))
+        promo = cursor.fetchone()
+        if not promo:
+            return await message.answer("❌ Такого промокода не существует.")
 
-    await message.answer(f"✅ Промокод успешно активирован! Вам зачислено: `{reward}` монет.", parse_mode="Markdown")
+        reward = promo[0]
+        cursor.execute("SELECT * FROM used_promos WHERE user_id = ? AND code = ?", (user_id, code))
+        if cursor.fetchone():
+            return await message.answer("❌ Вы уже активировали этот промокод!")
 
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (reward, user_id))
+        cursor.execute("INSERT INTO used_promos (user_id, code) VALUES (?, ?)", (user_id, code))
+        conn.commit()
+        return await message.answer(f"✅ Промокод успешно активирован! Вам зачислено: `{reward}` монет.", parse_mode="Markdown")
 
-# --- ИГРЫ КАЗИНО БЕЗ СЛЭША ---
+    # 4. Слоты
+    elif cmd == "слоты":
+        if len(parts) < 2 or not parts[1].isdigit():
+            return await message.answer("❌ Формат: `слоты <ставка>`", parse_mode="Markdown")
+        bet = int(parts[1])
+        if bet < 5:
+            return await message.answer("❌ Минимальная ставка — 5 монет.")
 
-@router.message(F.text.lower().startswith("слоты "))
-async def play_slots(message: Message):
-    args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        return await message.answer("❌ Формат: `слоты <ставка>`", parse_mode="Markdown")
+        bal, vip_exp, _ = get_user_data(user_id)
+        if bal < bet:
+            return await message.answer(f"❌ Мало монет на балансе! У вас: {bal}, а ставка: {bet}")
 
-    bet = int(args[1])
-    if bet < 5:
-        return await message.answer("❌ Минимальная ставка — 5 монет.")
+        cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, user_id))
+        conn.commit()
 
-    bal, vip_exp, _ = get_user_data(message.from_user.id)
-    if bal < bet:
-        return await message.answer("❌ Мало монет на балансе!")
+        msg = await message.answer_dice("🎰")
+        await asyncio.sleep(2.5)
 
-    cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, message.from_user.id))
-    conn.commit()
+        if msg.dice.value in [1, 22, 43, 64]:
+            win = (bet * 5) * (2 if is_vip(vip_exp) else 1)
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, user_id))
+            await message.answer(f"🎰 **ДЖЕКПОТ!** Выиграл `{win}` монет!", parse_mode="Markdown")
+        else:
+            await message.answer("😢 Мимо, бро. Повезет в следующий раз.")
+        conn.commit()
 
-    msg = await message.answer_dice("🎰")
-    await asyncio.sleep(2.5)
+    # 5. Кости
+    elif cmd == "кости":
+        if len(parts) < 2 or not parts[1].isdigit():
+            return await message.answer("❌ Формат: `кости <ставка>`", parse_mode="Markdown")
+        bet = int(parts[1])
+        if bet < 5:
+            return await message.answer("❌ Минимальная ставка — 5 монет.")
 
-    if msg.dice.value in [1, 22, 43, 64]:
-        win = (bet * 5) * (2 if is_vip(vip_exp) else 1)
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, message.from_user.id))
-        await message.answer(f"🎰 **ДЖЕКПОТ!** Выиграл `{win}` монет!", parse_mode="Markdown")
-    else:
-        await message.answer("😢 Мимо, бро. Повезет в следующий раз.")
-    conn.commit()
+        bal, vip_exp, _ = get_user_data(user_id)
+        if bal < bet:
+            return await message.answer(f"❌ Мало монет на балансе! У вас: {bal}, а ставка: {bet}")
 
+        cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, user_id))
+        conn.commit()
 
-@router.message(F.text.lower().startswith("кости "))
-async def play_dice(message: Message):
-    args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        return await message.answer("❌ Формат: `кости <ставка>`", parse_mode="Markdown")
+        msg = await message.answer_dice("🎲")
+        await asyncio.sleep(3)
 
-    bet = int(args[1])
-    if bet < 5:
-        return await message.answer("❌ Минимальная ставка — 5 монет.")
+        if msg.dice.value >= 4:
+            win = (bet * 2) * (2 if is_vip(vip_exp) else 1)
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, user_id))
+            await message.answer(f"🎯 Выпало {msg.dice.value}! Забирай выигрыш: `{win}` монет!", parse_mode="Markdown")
+        else:
+            await message.answer(f"😢 Выпало {msg.dice.value}. Луз.")
+        conn.commit()
 
-    bal, vip_exp, _ = get_user_data(message.from_user.id)
-    if bal < bet:
-        return await message.answer("❌ Мало монет на балансе!")
+    # 6. Мины
+    elif cmd == "мины":
+        if len(parts) < 2 or not parts[1].isdigit():
+            return await message.answer("❌ Формат: `мины <ставка>`", parse_mode="Markdown")
+        bet = int(parts[1])
+        if bet < 5:
+            return await message.answer("❌ Минимальная ставка — 5 монет.")
 
-    cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, message.from_user.id))
-    conn.commit()
+        bal, vip_exp, _ = get_user_data(user_id)
+        if bal < bet:
+            return await message.answer(f"❌ Мало монет на балансе! У вас: {bal}, а ставка: {bet}")
 
-    msg = await message.answer_dice("🎲")
-    await asyncio.sleep(3)
+        cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, user_id))
+        conn.commit()
 
-    if msg.dice.value >= 4:
-        win = (bet * 2) * (2 if is_vip(vip_exp) else 1)
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, message.from_user.id))
-        await message.answer(f"🎯 Выпало {msg.dice.value}! Забирай выигрыш: `{win}` монет!", parse_mode="Markdown")
-    else:
-        await message.answer(f"😢 Выпало {msg.dice.value}. Луз.")
-    conn.commit()
-
-
-@router.message(F.text.lower().startswith("мины "))
-async def play_mines(message: Message):
-    args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        return await message.answer("❌ Формат: `мины <ставка>`", parse_mode="Markdown")
-
-    bet = int(args[1])
-    if bet < 5:
-        return await message.answer("❌ Минимальная ставка — 5 монет.")
-
-    bal, vip_exp, _ = get_user_data(message.from_user.id)
-    if bal < bet:
-        return await message.answer("❌ Мало монет на балансе!")
-
-    cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, message.from_user.id))
-    conn.commit()
-
-    chance = 0.25 - (0.15 if is_vip(vip_exp) else 0)
-    if random.random() > chance:
-        win = int(bet * 2) * (2 if is_vip(vip_exp) else 1)
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, message.from_user.id))
-        await message.answer(f"💰 **Изи катка!** Поле чистое. Выигрыш: `{win}` монет!", parse_mode="Markdown")
-    else:
-        await message.answer("💥 **БУХ!** Нарвался на мину, луз.", parse_mode="Markdown")
-    conn.commit()
+        chance = 0.25 - (0.15 if is_vip(vip_exp) else 0)
+        if random.random() > chance:
+            win = int(bet * 2) * (2 if is_vip(vip_exp) else 1)
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, user_id))
+            await message.answer(f"💰 **Изи катка!** Поле чистое. Выигрыш: `{win}` монет!", parse_mode="Markdown")
+        else:
+            await message.answer("💥 **БУХ!** Нарвался на мину, луз.", parse_mode="Markdown")
+        conn.commit()
 
 
 # Запуск бота
