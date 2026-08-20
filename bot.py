@@ -14,7 +14,7 @@ from aiogram.types import (
 )
 
 # Инициализация бота
-TOKEN = "ВСТАВЬ_СВОЙ_ТОКЕН_СЮДА"
+TOKEN = "8983343344:AAFSfWIZdeqOffaycVrhU5TWC0eTA9FSpRU"
 bot = Bot(token=TOKEN)
 router = Router()
 dp = Dispatcher()
