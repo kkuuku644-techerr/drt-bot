@@ -533,4 +533,163 @@ async def text_commands_router(message: Message):
 
         bal, _, _ = get_user_data(user_id, username)
         if bal < amount:
-            return await message.answer(f"❌ Недостаточно монет! Ваш баланс: `{bal}` монет.", p
+            return await message.answer(f"❌ Недостаточно монет! Ваш баланс: `{bal}` монет.", p        bal, _, _ = get_user_data(user_id, username)
+        if bal < amount:
+            return await message.answer(f"❌ Недостаточно монет! Ваш баланс: `{bal}` монет.", parse_mode="Markdown")
+
+        get_user_data(target_id)
+        commission = int(amount * 0.10)
+        final_amount = amount - commission
+
+        with sqlite3.connect("database.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (final_amount, target_id))
+            conn.commit()
+
+        return await message.answer(
+            f"✅ Успешный перевод!\n"
+            f"📤 Списано с учетом комиссии (10%): `{amount}` монет\n"
+            f"📥 Получателю зачислено: `{final_amount}` монет",
+            parse_mode="Markdown"
+        )
+
+    # 4. Промокоды (Работают для всех с учетом лимитов)
+    elif cmd == "промо":
+        if len(parts) < 2:
+            return await message.answer("❌ Укажите код промокода. Пример: `промо START`", parse_mode="Markdown")
+        code = parts[1].upper()
+
+        with sqlite3.connect("database.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT reward, max_uses, uses_count FROM promos WHERE code = ?", (code,))
+            promo = cursor.fetchone()
+            if not promo:
+                return await message.answer("❌ Такого промокода не существует.")
+
+            reward, max_uses, uses_count = promo[0], promo[1], promo[2]
+
+            if uses_count >= max_uses:
+                return await message.answer("❌ Лимит активаций этого промокода исчерпан!")
+
+            cursor.execute("SELECT * FROM used_promos WHERE user_id = ? AND code = ?", (user_id, code))
+            if cursor.fetchone():
+                return await message.answer("❌ Вы уже активировали этот промокод!")
+
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (reward, user_id))
+            cursor.execute("UPDATE promos SET uses_count = uses_count + 1 WHERE code = ?", (code,))
+            cursor.execute("INSERT INTO used_promos (user_id, code) VALUES (?, ?)", (user_id, code))
+            conn.commit()
+
+        return await message.answer(f"✅ Промокод успешно активирован! Вам зачислено: `{reward}` монет.", parse_mode="Markdown")
+
+    # 5. Казино меню
+    elif cmd == "казино":
+        return await message.answer(
+            "🎰 **Игровое казино:**\n\n"
+            "Доступные игры:\n"
+            "• `слоты <ставка>`\n"
+            "• `кости <ставка>`\n"
+            "• `мины <ставка>`",
+            parse_mode="Markdown"
+        )
+
+    # 6. Слоты
+    elif cmd == "слоты":
+        if len(parts) < 2 or not parts[1].isdigit():
+            return await message.answer("❌ Формат: `слоты <ставка>`", parse_mode="Markdown")
+        bet = int(parts[1])
+        if bet < 5:
+            return await message.answer("❌ Минимальная ставка — 5 монет.")
+
+        bal, vip_exp, _ = get_user_data(user_id, username)
+        if bal < bet:
+            return await message.answer(f"❌ Мало монет на балансе! У вас: {bal}, а ставка: {bet}")
+
+        with sqlite3.connect("database.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, user_id))
+            conn.commit()
+
+        msg = await message.answer_dice("🎰")
+        await asyncio.sleep(2.5)
+
+        with sqlite3.connect("database.db") as conn:
+            cursor = conn.cursor()
+            if msg.dice.value in [1, 22, 43, 64]:
+                win = (bet * 5) * (2 if is_vip(vip_exp) else 1)
+                cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, user_id))
+                conn.commit()
+                await message.answer(f"🎰 **ДЖЕКПОТ!** Выиграл `{win}` монет!", parse_mode="Markdown")
+            else:
+                await message.answer("😢 Мимо, бро. Повезет в следующий раз.")
+
+    # 7. Кости
+    elif cmd == "кости":
+        if len(parts) < 2 or not parts[1].isdigit():
+            return await message.answer("❌ Формат: `кости <ставка>`", parse_mode="Markdown")
+        bet = int(parts[1])
+        if bet < 5:
+            return await message.answer("❌ Минимальная ставка — 5 монет.")
+
+        bal, vip_exp, _ = get_user_data(user_id, username)
+        if bal < bet:
+            return await message.answer(f"❌ Мало монет на балансе! У вас: {bal}, а ставка: {bet}")
+
+        with sqlite3.connect("database.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, user_id))
+            conn.commit()
+
+        msg = await message.answer_dice("🎲")
+        await asyncio.sleep(3)
+
+        with sqlite3.connect("database.db") as conn:
+            cursor = conn.cursor()
+            if msg.dice.value >= 4:
+                win = (bet * 2) * (2 if is_vip(vip_exp) else 1)
+                cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, user_id))
+                conn.commit()
+                await message.answer(f"🎯 Выпало {msg.dice.value}! Забирай выигрыш: `{win}` монет!", parse_mode="Markdown")
+            else:
+                await message.answer(f"😢 Выпало {msg.dice.value}. Луз.")
+
+    # 8. Мины
+    elif cmd == "мины":
+        if len(parts) < 2 or not parts[1].isdigit():
+            return await message.answer("❌ Формат: `мины <ставка>`", parse_mode="Markdown")
+        bet = int(parts[1])
+        if bet < 5:
+            return await message.answer("❌ Минимальная ставка — 5 монет.")
+
+        bal, vip_exp, _ = get_user_data(user_id, username)
+        if bal < bet:
+            return await message.answer(f"❌ Мало монет на балансе! У вас: {bal}, а ставка: {bet}")
+
+        with sqlite3.connect("database.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, user_id))
+            conn.commit()
+
+        chance = 0.25 - (0.15 if is_vip(vip_exp) else 0)
+
+        with sqlite3.connect("database.db") as conn:
+            cursor = conn.cursor()
+            if random.random() > chance:
+                win = int(bet * 2) * (2 if is_vip(vip_exp) else 1)
+                cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (win, user_id))
+                conn.commit()
+                await message.answer(f"💰 **Изи катка!** Поле чистое. Выигрыш: `{win}` монет!", parse_mode="Markdown")
+            else:
+                await message.answer("💥 **БУХ!** Нарвался на мину, луз.", parse_mode="Markdown")
+
+
+# Запуск бота
+async def main():
+    dp.include_router(router)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
