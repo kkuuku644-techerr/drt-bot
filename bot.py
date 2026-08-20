@@ -14,8 +14,8 @@ from aiogram.types import (
 )
 
 # Инициализация бота и админа
-TOKEN = "ВСТАВЬ_СВОЙ_ТОКЕН_СЮДА"
-ADMIN_ID = 123456789  # <--- ВПИШИ СЮДА СВОЙ TELEGRAM ID ЦИФРАМИ!
+TOKEN = "8983343344:AAFSfWIZdeqOffaycVrhU5TWC0eTA9FSpRU"
+ADMIN_ID = 7959524856  # <--- ВПИШИ СЮДА СВОЙ TELEGRAM ID ЦИФРАМИ!
 
 bot = Bot(token=TOKEN)
 router = Router()
