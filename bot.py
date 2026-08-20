@@ -532,7 +532,7 @@ async def text_commands_router(message: Message):
             return await message.answer("❌ Нельзя переводить монеты самому себе!")
 
          
- get_user_data(target_id)
+            get_user_data(target_id)
  commission = int(amount * 0.10)
  final_amount = amount - commission
         final_amount = amount - commission
