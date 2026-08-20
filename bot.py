@@ -531,16 +531,16 @@ async def text_commands_router(message: Message):
         if target_id == user_id:
             return await message.answer("❌ Нельзя переводить монеты самому себе!")
 
-        bal, _, _ = get_user_data(user_id, username)
-        if bal < amount:
-            return await message.answer(f"❌ Недостаточно монет! Ваш баланс: {bal} монет.", parse_mode="Markdown")
-            
-        get_user_data(target_id)
-        commission = int(amount * 0.10)
-            return await message.answer(f"❌ Недостаточно монет! Ваш баланс: `{bal}` монет.", parse_mode="Markdown")
-
-        get_user_data(target_id)
-        commission = int(amount * 0.10)
+         bal, _, _ = get_user_data(user_id, username)
+ if bal < amount:
+     return await message.answer(f"❌ Недостаточно монет! Ваш баланс: {bal} монет.", parse_mode="Markdown")
+ bal, _, _ = get_user_data(user_id, username)
+ if bal < amount:
+     reλurn await message.answer(f"❌ Недостаточно монет! Ваш баланс: {bal} монет.", parse_mode="Markdown")
+ 
+ get_user_data(target_id)
+ commission = int(amount * 0.10)
+ final_amount = amount - commission
         final_amount = amount - commission
 
         with sqlite3.connect("database.db") as conn:
