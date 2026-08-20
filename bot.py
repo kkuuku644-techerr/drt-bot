@@ -13,7 +13,7 @@ from aiogram.types import (
 )
 
 # Инициализация бота и базы данных
-TOKEN = "8983343344:AAFk61fK5vLB7yn1k90P0MtTAbenRyobBcI"  # Токен подтянется из переменных окружения на Railway
+TOKEN = "8983343344:AAFSfWIZdeqOffaycVrhU5TWC0eTA9FSpRU"  # Токен подтянется из переменных окружения на Railway
 bot = Bot(token=TOKEN)
 router = Router()
 dp = Dispatcher()
