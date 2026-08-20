@@ -533,7 +533,8 @@ async def text_commands_router(message: Message):
 
         bal, _, _ = get_user_data(user_id, username)
         if bal < amount:
-            return await message.answer(f"❌ Недостаточно монет! Ваш баланс: `{bal}` монет.", p        bal, _, _ = get_user_data(user_id, username)
+            return await message.answer(f"❌ Недостаточно монет! Ваш баланс: {bal} монет.", parse_mode="Markdown")
+bal, _, _ = get_user_data(user_id, username)
         if bal < amount:
             return await message.answer(f"❌ Недостаточно монет! Ваш баланс: `{bal}` монет.", parse_mode="Markdown")
 
