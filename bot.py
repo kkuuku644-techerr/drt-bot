@@ -86,9 +86,8 @@ async def show_catalog(message: Message):
     conn.close()
     if not pets: await message.answer("😔 Каталог пуст."); return
     for p in pets:
-        await message.answer(f"🐾 **{p[1]}**\n💵 Цена: **{p[2]} монет**", 
-                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛒 Купить", callback_data=f"buy_{p[0]}")]🫰]), parse_mode="Markdown")
-
+        await message.answer(f"🐾 {p[1]}\n💵 Цена: {p[2]} монет", 
+                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛒 Купить", callback_data=f"buy_{p[0]}")]]), parse_mode="Markdown")
 @router.callback_query(F.data.startswith("buy_"))
 async def process_buy(callback: CallbackQuery, bot: Bot):
     pet_id = int(callback.data.split("_")[1])
