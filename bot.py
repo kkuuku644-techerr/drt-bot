@@ -1,25 +1,18 @@
 import asyncio
 import logging
 import sqlite3
+import time
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    Message,
-    ReplyKeyboardMarkup,
-)
+from aiogram.types import *
 
-# --- НАСТРОЙКИ ---
+# --- КОНФИГ ---
 TOKEN = "8981643006:AAFoHeKbNAuUuQdgMwYq2_7jUSi5JVPvSeA"
-ADMIN_IDS = [6468626005, 7959524856]  # Твой ID и ID знакомого
-SELLER_USERNAME = "Whars12"           # Юзернейм для связи (без @)
-CHANNEL_ID = -1001004212833348        # ID канала (с -100 в начале)
+ADMIN_IDS = [6468626005, 7959524856]
+SELLER_USERNAME = "Whars12"
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
@@ -27,139 +20,146 @@ router = Router()
 def init_db():
     conn = sqlite3.connect("adopt_shop.db")
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS pets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price INTEGER, status TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0, vip_expires INTEGER DEFAULT 0)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS pets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price INTEGER, stock INTEGER DEFAULT 1)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS promos (code TEXT PRIMARY KEY, amount INTEGER)")
     conn.commit()
     conn.close()
 
 init_db()
 
+# --- FSM СОСТОЯНИЯ ---
 class AdminStates(StatesGroup):
-    waiting_for_pet_name = State()
-    waiting_for_pet_price = State()
-    waiting_for_user_id = State()
-    waiting_for_user_amount = State()
+    add_pet_name = State()
+    add_pet_price = State()
+    add_pet_stock = State()
+    add_promo_code = State()
+    add_promo_amount = State()
+    give_money_id = State()
+    give_money_amount = State()
+    give_vip_id = State()
 
-def get_main_keyboard(is_admin: bool):
-    kb = [[KeyboardButton(text="📦 Каталог петов"), KeyboardButton(text="💰 Мой баланс")],
-          [KeyboardButton(text="👤 Связь с продавцом")]]
-    if is_admin:
-        kb.append([KeyboardButton(text="⚙️ Админ-панель")])
+# --- КЛАВИАТУРЫ ---
+def get_main_kb(uid):
+    kb = [[KeyboardButton(text="📦 Каталог"), KeyboardButton(text="💰 Баланс")]]
+    if uid in ADMIN_IDS: kb.append([KeyboardButton(text="⚙️ Админ-панель")])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-def get_admin_keyboard():
+def get_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Добавить пета", callback_data="add_pet")],
-        [InlineKeyboardButton(text="💳 Выдать монеты", callback_data="give_money")]
+        [InlineKeyboardButton(text="➕ Добавить пета", callback_data="adm_addpet")],
+        [InlineKeyboardButton(text="🎁 Создать промо", callback_data="adm_addpromo")],
+        [InlineKeyboardButton(text="💰 Выдать монеты", callback_data="adm_money")],
+        [InlineKeyboardButton(text="👑 Выдать VIP", callback_data="adm_vip")]
     ])
 
+# --- ЛОГИКА ---
 @router.message(Command("start"))
-async def cmd_start(message: Message):
-    conn = sqlite3.connect("adopt_shop.db")
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
-    conn.commit()
-    conn.close()
-    await message.answer("🐾 Привет! Добро пожаловать в магазин петов Adopt Me!", 
-                         reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS))
+async def start(msg: Message):
+    await msg.answer("🐾 Добро пожаловать!", reply_markup=get_main_kb(msg.from_user.id))
 
-@router.message(F.text == "💰 Мой баланс")
-async def show_balance(message: Message):
-    conn = sqlite3.connect("adopt_shop.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (message.from_user.id,))
-    res = cursor.fetchone()
-    conn.close()
-    balance = res[0] if res else 0
-    await message.answer(f"💳 Твой баланс: **{balance} монет**", parse_mode="Markdown")
-
-@router.message(F.text == "👤 Связь с продавцом")
-async def contact_seller(message: Message):
-    await message.answer(f"✍️ По вопросам пиши сюда:\n👉 https://t.me/{SELLER_USERNAME}", disable_web_page_preview=True)
-
-@router.message(F.text == "📦 Каталог петов")
-async def show_catalog(message: Message):
-    conn = sqlite3.connect("adopt_shop.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, price FROM pets")
-    pets = cursor.fetchall()
-    conn.close()
-    if not pets: await message.answer("😔 Каталог пуст."); return
-    for p in pets:
-        await message.answer(f"🐾 {p[1]}\n💵 Цена: {p[2]} монет", 
-                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛒 Купить", callback_data=f"buy_{p[0]}")]]), parse_mode="Markdown")
-@router.callback_query(F.data.startswith("buy_"))
-async def process_buy(callback: CallbackQuery, bot: Bot):
-    pet_id = int(callback.data.split("_")[1])
-    user_id = callback.from_user.id
-    conn = sqlite3.connect("adopt_shop.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    balance = cursor.fetchone()[0]
-    cursor.execute("SELECT name, price FROM pets WHERE id = ?", (pet_id,))
-    pet = cursor.fetchone()
-
-    if pet and balance >= pet[1]:
-        cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (pet[1], user_id))
-        cursor.execute("DELETE FROM pets WHERE id = ?", (pet_id,))
-        conn.commit()
-        await callback.message.edit_text(f"✅ Успешно! Ты купил **{pet[0]}**. Ожидай сообщения от админа.")
-        await bot.send_message(CHANNEL_ID, f"🚨 **Новая покупка!**\nПокупатель: {callback.from_user.full_name} (@{callback.from_user.username})\nПет: {pet[0]}", parse_mode="Markdown")
-    else:
-        await callback.answer("❌ Не хватает монет!", show_alert=True)
-    conn.close()
-
-# --- АДМИН ПАНЕЛЬ ---
 @router.message(F.text == "⚙️ Админ-панель")
-async def admin_panel(message: Message):
-    if message.from_user.id in ADMIN_IDS:
-        await message.answer("🛠 Панель управления:", reply_markup=get_admin_keyboard())
+async def admin_panel(msg: Message):
+    if msg.from_user.id in ADMIN_IDS:
+        await msg.answer("🛠 Панель управления:", reply_markup=get_admin_kb())
 
-@router.callback_query(F.data == "give_money")
-async def start_give_money(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("Введите ID пользователя:")
-    await state.set_state(AdminStates.waiting_for_user_id)
+# --- АДМИН ДЕЙСТВИЯ (Кнопки) ---
+@router.callback_query(F.data.startswith("adm_"))
+async def admin_actions(call: CallbackQuery, state: FSMContext):
+    if call.data == "adm_addpet":
+        await call.message.answer("Введите название пета:")
+        await state.set_state(AdminStates.add_pet_name)
+    elif call.data == "adm_money":
+        await call.message.answer("Введите ID пользователя:")
+        await state.set_state(AdminStates.give_money_id)
+    elif call.data == "adm_vip":
+        await call.message.answer("Введите ID пользователя для выдачи VIP на 30 дней:")
+        await state.set_state(AdminStates.give_vip_id)
+    await call.answer()
 
-@router.message(AdminStates.waiting_for_user_id)
-async def get_id(message: Message, state: FSMContext):
-    await state.update_data(uid=int(message.text))
-    await message.answer("Введите сумму монет:")
-    await state.set_state(AdminStates.waiting_for_user_amount)
+# Добавление пета (пошагово)
+@router.message(AdminStates.add_pet_name)
+async def pet_n(msg: Message, state: FSMContext):
+    await state.update_data(name=msg.text)
+    await msg.answer("Введите цену:")
+    await state.set_state(AdminStates.add_pet_price)
 
-@router.message(AdminStates.waiting_for_user_amount)
-async def get_amount(message: Message, state: FSMContext):
-    amount = int(message.text)
-    uid = (await state.get_data())['uid']
-    conn = sqlite3.connect("adopt_shop.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, uid))
-    conn.commit()
-    conn.close()
-    await state.clear()
-    await message.answer("✅ Баланс успешно пополнен!")
+@router.message(AdminStates.add_pet_price)
+async def pet_p(msg: Message, state: FSMContext):
+    await state.update_data(price=msg.text)
+    await msg.answer("Введите количество (сток):")
+    await state.set_state(AdminStates.add_pet_stock)
 
-@router.callback_query(F.data == "add_pet")
-async def add_pet(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("Название пета:")
-    await state.set_state(AdminStates.waiting_for_pet_name)
-
-@router.message(AdminStates.waiting_for_pet_name)
-async def add_name(message: Message, state: FSMContext):
-    await state.update_data(name=message.text)
-    await message.answer("Цена:")
-    await state.set_state(AdminStates.waiting_for_pet_price)
-
-@router.message(AdminStates.waiting_for_pet_price)
-async def add_price(message: Message, state: FSMContext):
+@router.message(AdminStates.add_pet_stock)
+async def pet_s(msg: Message, state: FSMContext):
     data = await state.get_data()
     conn = sqlite3.connect("adopt_shop.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO pets (name, price, status) VALUES (?, ?, ?)", (data['name'], int(message.text), "В наличии"))
+    cursor.execute("INSERT INTO pets (name, price, stock) VALUES (?, ?, ?)", (data['name'], data['price'], msg.text))
     conn.commit()
     conn.close()
     await state.clear()
-    await message.answer("✅ Пет добавлен в магазин!")
+    await msg.answer("✅ Пет добавлен!")
 
+# Выдача монет
+@router.message(AdminStates.give_money_id)
+async def gm_id(msg: Message, state: FSMContext):
+    await state.update_data(uid=msg.text)
+    await msg.answer("Сумма:")
+    await state.set_state(AdminStates.give_money_amount)
+
+@router.message(AdminStates.give_money_amount)
+async def gm_amt(msg: Message, state: FSMContext):
+    data = await state.get_data()
+    conn = sqlite3.connect("adopt_shop.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (msg.text, data['uid']))
+    conn.commit()
+    conn.close()
+    await state.clear()
+    await msg.answer("✅ Монеты начислены!")
+
+# Выдача VIP
+@router.message(AdminStates.give_vip_id)
+async def give_vip(msg: Message, state: FSMContext):
+    expires = int(time.time() + 30 * 24 * 60 * 60)
+    conn = sqlite3.connect("adopt_shop.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET vip_expires = ? WHERE user_id = ?", (expires, msg.text))
+    conn.commit()
+    conn.close()
+    await state.clear()
+    await msg.answer("👑 VIP выдан на месяц!")
+
+# --- ПОКУПКА ---
+@router.callback_query(F.data.startswith("buy_"))
+async def buy(call: CallbackQuery, bot: Bot):
+    uid = call.from_user.id
+    pid = int(call.data.split("_")[1])
+    conn = sqlite3.connect("adopt_shop.db")
+    cur = conn.cursor()
+    cur.execute("SELECT balance, vip_expires FROM users WHERE user_id = ?", (uid,))
+    user = cur.fetchone()
+    cur.execute("SELECT name, price, stock FROM pets WHERE id = ?", (pid,))
+    pet = cur.fetchone()
+
+    # VIP скидка 10%
+    price = int(pet[1] * 0.9) if user[1] > time.time() else pet[1]
+
+    if user[0] >= price and pet[2] > 0:
+        cur.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (price, uid))
+        cur.execute("UPDATE pets SET stock = stock - 1 WHERE id = ?", (pid,))
+        conn.commit()
+        await call.message.edit_text(f"✅ Куплено: {pet[0]}!")
+        # Уведомление админам
+        for aid in ADMIN_IDS:
+            await bot.send_message(aid, f"🚨 Покупка {pet[0]} от {call.from_user.full_name}", 
+                                   reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👤 Написать", url=f"tg://user?id={uid}")]]))
+    else:
+        await call.answer("❌ Нет монет или товара!", show_alert=True)
+    conn.close()
+
+# Запуск
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
