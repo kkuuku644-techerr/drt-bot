@@ -10,7 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import *
 
 # --- КОНФИГ ---
-TOKEN = "8981643006:AAFoHeKbNAuUuQdgMwYq2_7jUSi5JVPvSeA"
+TOKEN = "8981643006:AAHv-k8X2Q7U1Tj8MfR92Hh1WDfCAMOUbr4"
 ADMIN_IDS = [6468626005, 7959524856]
 SELLER_USERNAME = "Whars12"
 REVIEWS_LINK = "https://t.me/+xxzJbxrmH440Y2Zi"
